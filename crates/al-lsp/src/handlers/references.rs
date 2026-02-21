@@ -3,6 +3,7 @@ use lsp_types::{Location, ReferenceParams};
 use al_syntax::ast::AlSymbolKind;
 use al_syntax::navigation::{
     find_all_references, find_interface_method_calls, identifier_context_at_offset,
+    interface_method_call_at_offset,
 };
 
 use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
@@ -16,6 +17,54 @@ pub fn handle_references(state: &WorldState, params: ReferenceParams) -> Option<
     let doc = state.documents.get(&uri)?;
     let byte_offset = lsp_position_to_byte_offset(&doc.rope, position)?;
     let source = doc.source();
+
+    // First, check if the cursor is on the method part of an interface-typed method call
+    // (e.g. `AddressProvider.GetAddress()` where AddressProvider is `Interface IAddressProvider`).
+    // If so, treat this as a reference query on the interface method itself.
+    if let Some((interface_name, method_name)) =
+        interface_method_call_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)
+    {
+        drop(doc); // Release the DashMap ref before iterating
+
+        let mut locations = Vec::new();
+        for entry in state.documents.iter() {
+            let other_doc = entry.value();
+            let other_source = other_doc.source();
+
+            // Include the interface method definition if requested
+            if include_declaration {
+                if let Some(method_sym) = other_doc
+                    .symbol_table
+                    .find_interface_method(&interface_name, &method_name)
+                {
+                    locations.push(Location {
+                        uri: entry.key().clone(),
+                        range: ts_range_to_lsp_range(method_sym.start_point, method_sym.end_point),
+                    });
+                }
+            }
+
+            // Find all call sites on interface-typed variables
+            let calls = find_interface_method_calls(
+                &other_doc.tree,
+                &other_source,
+                &other_doc.symbol_table,
+                &interface_name,
+                &method_name,
+            );
+            for (start, end) in calls {
+                locations.push(Location {
+                    uri: entry.key().clone(),
+                    range: ts_range_to_lsp_range(start, end),
+                });
+            }
+        }
+
+        if locations.is_empty() {
+            return None;
+        }
+        return Some(locations);
+    }
 
     let refs = find_all_references(
         &doc.tree,
@@ -359,6 +408,61 @@ codeunit 50201 CompanyAddressProvider2 implements IAddressProvider
         assert!(
             !lines.contains(&18),
             "impl GetAddress references should NOT include interface call site (line 18), got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_references_on_interface_method_call_resolves_to_interface() {
+        // Cursor on GetAddress in `IAddressProvider.GetAddress()` — a call through an
+        // interface-typed variable. References should resolve to the INTERFACE method,
+        // showing the interface definition and all interface call sites, NOT the
+        // codeunit implementation procedure.
+        let source = full_example_source();
+        let uri = Url::parse("file:///test/all.al").unwrap();
+
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        // Cursor on "GetAddress" in `IAddressProvider.GetAddress()` (line 35, col 25)
+        // Line 35 (0-indexed) = `        IAddressProvider.GetAddress();`
+        // 8 spaces + "IAddressProvider." = 25 chars, so GetAddress starts at col 25
+        let params = make_ref_params(uri.clone(), 35, 25, true);
+        let result = handle_references(&state, params);
+
+        assert!(
+            result.is_some(),
+            "expected references for GetAddress on interface call"
+        );
+        let locs = result.unwrap();
+        let lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+        eprintln!("interface method call reference lines: {lines:?}");
+
+        // Should include the interface method definition (line 2)
+        assert!(
+            lines.contains(&2),
+            "expected interface method definition (line 2), got: {lines:?}"
+        );
+
+        // Should include both interface call sites (lines 18 and 35)
+        assert!(
+            lines.contains(&18),
+            "expected call site on line 18, got: {lines:?}"
+        );
+        assert!(
+            lines.contains(&35),
+            "expected call site on line 35, got: {lines:?}"
+        );
+
+        // Should NOT include the implementation procedure declarations (lines 7 and 24)
+        assert!(
+            !lines.contains(&7),
+            "should NOT include impl procedure on line 7, got: {lines:?}"
+        );
+        assert!(
+            !lines.contains(&24),
+            "should NOT include impl procedure on line 24, got: {lines:?}"
         );
     }
 }

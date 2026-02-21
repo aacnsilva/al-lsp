@@ -469,6 +469,57 @@ fn collect_folding_ranges_recursive(node: Node, ranges: &mut Vec<FoldingArea>) {
     }
 }
 
+/// When the cursor is on the `method` part of a `method_call` (e.g. the `GetAddress`
+/// in `AddressProvider.GetAddress()`), check whether the object is a variable typed as
+/// an interface. If so, return `(interface_name, method_name)`.
+///
+/// This lets the references handler redirect to the interface-method reference path
+/// rather than falling through to implementation-procedure logic.
+pub fn interface_method_call_at_offset(
+    tree: &Tree,
+    source: &str,
+    symbol_table: &DocumentSymbolTable,
+    byte_offset: usize,
+) -> Option<(String, String)> {
+    let node = node_at_offset(tree, byte_offset)?;
+
+    // Must be an identifier
+    match node.kind() {
+        "identifier" | "quoted_identifier" => {}
+        _ => return None,
+    }
+
+    // Must be the `method` field of a `method_call`
+    let parent = node.parent()?;
+    if parent.kind() != "method_call" {
+        return None;
+    }
+    let method_node = parent.child_by_field_name("method")?;
+    if method_node.id() != node.id() {
+        return None;
+    }
+
+    // Get the object node and resolve it
+    let object_node = parent.child_by_field_name("object")?;
+    let obj_name = extract_name(object_node, source);
+    let candidates = symbol_table.lookup_in_scope(&obj_name, parent.start_byte());
+
+    for sym in candidates {
+        if matches!(sym.kind, AlSymbolKind::Variable | AlSymbolKind::Parameter) {
+            if let Some(ref type_info) = sym.type_info {
+                let lower = type_info.trim().to_lowercase();
+                if let Some(rest) = lower.strip_prefix("interface ") {
+                    let iface_name = rest.trim().trim_matches('"');
+                    let method_name = extract_name(node, source);
+                    return Some((iface_name.to_string(), method_name));
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Find all call sites of a method on variables typed as a specific interface.
 ///
 /// Walks the parse tree looking for `method_call` nodes where:
