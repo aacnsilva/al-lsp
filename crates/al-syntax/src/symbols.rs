@@ -89,6 +89,49 @@ impl DocumentSymbolTable {
         }
         Some(current)
     }
+
+    /// Get all symbols reachable from a given byte offset.
+    /// Returns locals (if inside a procedure) → object-level members → top-level objects.
+    pub fn reachable_symbols(&self, byte_offset: usize) -> Vec<&AlSymbol> {
+        let mut result = Vec::new();
+
+        for sym in &self.symbols {
+            if sym.start_byte <= byte_offset && byte_offset <= sym.end_byte {
+                // Inside this object — check for procedure scope
+                for child in &sym.children {
+                    if child.start_byte <= byte_offset && byte_offset <= child.end_byte {
+                        // Inside a procedure/trigger — add its locals first
+                        for local in &child.children {
+                            result.push(local);
+                        }
+                    }
+                }
+                // Add object-level children (procedures, variables, fields, etc.)
+                for child in &sym.children {
+                    result.push(child);
+                }
+            }
+            // Add the object itself
+            result.push(sym);
+        }
+
+        // If we didn't find ourselves inside any object, return all top-level symbols
+        if result.is_empty() {
+            for sym in &self.symbols {
+                result.push(sym);
+            }
+        }
+
+        result
+    }
+
+    /// Find a top-level object by name (case-insensitive).
+    pub fn find_object_by_name(&self, name: &str) -> Option<&AlSymbol> {
+        let lower = name.to_lowercase();
+        self.symbols
+            .iter()
+            .find(|s| matches!(s.kind, AlSymbolKind::Object(_)) && s.name.to_lowercase() == lower)
+    }
 }
 
 fn insert_into_index(
@@ -109,6 +152,19 @@ fn insert_into_index(
         child_path.push(child_idx);
         insert_into_index(index, child, object_idx, &child_path);
     }
+}
+
+/// Return a list of AL language keywords for completion.
+pub fn al_keywords() -> &'static [&'static str] {
+    &[
+        "begin", "end", "if", "then", "else", "for", "to", "downto", "do", "while",
+        "repeat", "until", "case", "of", "with", "exit", "var", "procedure", "trigger",
+        "local", "internal", "protected", "true", "false", "not", "and", "or", "xor",
+        "mod", "div", "in", "array", "of", "temporary", "record",
+        "codeunit", "table", "page", "report", "query", "xmlport", "enum",
+        "tableextension", "pageextension", "enumextension",
+        "field", "key", "fieldgroup",
+    ]
 }
 
 /// Format symbol info as Markdown for hover display.
@@ -154,6 +210,56 @@ mod tests {
         assert_eq!(table.lookup("HELLOWORLD").len(), 1);
         assert_eq!(table.lookup("HelloWorld").len(), 1);
         assert_eq!(table.lookup("nonexistent").len(), 0);
+    }
+
+    #[test]
+    fn test_reachable_symbols() {
+        let source = r#"codeunit 50100 Test
+{
+    var
+        GlobalVar: Integer;
+
+    procedure DoWork()
+    var
+        LocalVar: Text;
+    begin
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        let proc_sym = &table.symbols[0].children[1]; // DoWork
+        let mid = (proc_sym.start_byte + proc_sym.end_byte) / 2;
+
+        let reachable = table.reachable_symbols(mid);
+        let names: Vec<&str> = reachable.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"LocalVar"), "should contain LocalVar");
+        assert!(names.contains(&"GlobalVar"), "should contain GlobalVar");
+        assert!(names.contains(&"DoWork"), "should contain DoWork");
+        assert!(names.contains(&"Test"), "should contain Test object");
+    }
+
+    #[test]
+    fn test_find_object_by_name() {
+        let source = r#"codeunit 50100 "My Codeunit"
+{
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        assert!(table.find_object_by_name("My Codeunit").is_some());
+        assert!(table.find_object_by_name("my codeunit").is_some());
+        assert!(table.find_object_by_name("Nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_al_keywords() {
+        let keywords = al_keywords();
+        assert!(keywords.contains(&"begin"));
+        assert!(keywords.contains(&"procedure"));
+        assert!(keywords.len() > 20);
     }
 
     #[test]

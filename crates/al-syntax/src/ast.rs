@@ -176,7 +176,7 @@ fn extract_children_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "procedure_declaration" => {
+            "procedure_declaration" | "interface_method" => {
                 if let Some(sym) = extract_procedure_symbol(child, source) {
                     symbols.push(sym);
                 }
@@ -460,5 +460,35 @@ mod tests {
         assert_eq!(table.children[1].name, "Name");
         assert_eq!(table.children[2].name, "PK");
         assert!(matches!(table.children[2].kind, AlSymbolKind::Key));
+    }
+
+    #[test]
+    fn test_extract_interface_symbols() {
+        let source = r#"interface ICustomer
+{
+    procedure GetName(): Text;
+    procedure SetName(NewName: Text);
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+
+        let symbols = extract_symbols(&tree, source);
+
+        assert_eq!(symbols.len(), 1);
+        let iface = &symbols[0];
+        assert_eq!(iface.name, "ICustomer");
+        assert!(matches!(iface.kind, AlSymbolKind::Object(AlObjectKind::Interface)));
+
+        // Two method signatures
+        assert_eq!(iface.children.len(), 2);
+        assert_eq!(iface.children[0].name, "GetName");
+        assert!(matches!(iface.children[0].kind, AlSymbolKind::Procedure));
+        assert_eq!(iface.children[0].type_info.as_deref(), Some("Text"));
+        assert_eq!(iface.children[1].name, "SetName");
+        assert!(matches!(iface.children[1].kind, AlSymbolKind::Procedure));
+        // SetName has a parameter
+        assert_eq!(iface.children[1].children.len(), 1);
+        assert_eq!(iface.children[1].children[0].name, "NewName");
     }
 }

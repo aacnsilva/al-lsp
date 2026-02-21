@@ -246,6 +246,18 @@
           "name": "_object_name"
         },
         {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "implements_clause"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
           "type": "STRING",
           "value": "{"
         },
@@ -480,7 +492,7 @@
           "members": [
             {
               "type": "SYMBOL",
-              "name": "_object_body"
+              "name": "_interface_body"
             },
             {
               "type": "BLANK"
@@ -573,6 +585,40 @@
         {
           "type": "SYMBOL",
           "name": "quoted_identifier"
+        }
+      ]
+    },
+    "implements_clause": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "PATTERN",
+          "value": "[iI][mM][pP][lL][eE][mM][eE][nN][tT][sS]"
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "_object_name"
+            },
+            {
+              "type": "REPEAT",
+              "content": {
+                "type": "SEQ",
+                "members": [
+                  {
+                    "type": "STRING",
+                    "value": ","
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "_object_name"
+                  }
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -679,6 +725,133 @@
           }
         ]
       }
+    },
+    "_interface_body": {
+      "type": "REPEAT1",
+      "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "SYMBOL",
+            "name": "property"
+          },
+          {
+            "type": "SYMBOL",
+            "name": "procedure_declaration"
+          },
+          {
+            "type": "SYMBOL",
+            "name": "interface_method"
+          }
+        ]
+      }
+    },
+    "interface_method": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "access",
+              "content": {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "PATTERN",
+                    "value": "[lL][oO][cC][aA][lL]"
+                  },
+                  {
+                    "type": "PATTERN",
+                    "value": "[iI][nN][tT][eE][rR][nN][aA][lL]"
+                  },
+                  {
+                    "type": "PATTERN",
+                    "value": "[pP][rR][oO][tT][eE][cC][tT][eE][dD]"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "PATTERN",
+          "value": "[pP][rR][oO][cC][eE][dD][uU][rR][eE]"
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "quoted_identifier"
+              }
+            ]
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "("
+        },
+        {
+          "type": "FIELD",
+          "name": "parameters",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "parameter_list"
+              },
+              {
+                "type": "BLANK"
+              }
+            ]
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ")"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "return_type",
+              "content": {
+                "type": "SYMBOL",
+                "name": "return_type"
+              }
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": ";"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
     },
     "property": {
       "type": "SEQ",

@@ -1,5 +1,13 @@
+pub mod completion;
 pub mod diagnostics;
+pub mod document_highlight;
 pub mod document_symbol;
 pub mod document_sync;
+pub mod folding_range;
 pub mod goto_definition;
+pub mod goto_type_definition;
 pub mod hover;
+pub mod references;
+pub mod rename;
+pub mod signature_help;
+pub mod workspace_symbol;

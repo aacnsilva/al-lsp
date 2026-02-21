@@ -97,7 +97,7 @@ module.exports = grammar({
       ),
 
     codeunit_declaration: ($) =>
-      seq(kw("codeunit"), $.integer_literal, $._object_name, "{", optional($._object_body), "}"),
+      seq(kw("codeunit"), $.integer_literal, $._object_name, optional($.implements_clause), "{", optional($._object_body), "}"),
 
     report_declaration: ($) =>
       seq(kw("report"), $.integer_literal, $._object_name, "{", optional($._object_body), "}"),
@@ -124,7 +124,7 @@ module.exports = grammar({
       seq(kw("query"), $.integer_literal, $._object_name, "{", optional($._object_body), "}"),
 
     interface_declaration: ($) =>
-      seq(kw("interface"), $._object_name, "{", optional($._object_body), "}"),
+      seq(kw("interface"), $._object_name, "{", optional($._interface_body), "}"),
 
     permissionset_declaration: ($) =>
       seq(kw("permissionset"), $.integer_literal, $._object_name, "{", optional($._object_body), "}"),
@@ -133,6 +133,10 @@ module.exports = grammar({
       seq(kw("controladdin"), $._object_name, "{", optional($._object_body), "}"),
 
     _object_name: ($) => choice($.identifier, $.quoted_identifier),
+
+    // implements IFoo, IBar
+    implements_clause: ($) =>
+      seq(kw("implements"), commaSep1($._object_name)),
 
     // ─── Object bodies ───────────────────────────────────────
 
@@ -168,6 +172,28 @@ module.exports = grammar({
 
     _enum_body: ($) =>
       repeat1(choice($.property, $.enum_value_declaration)),
+
+    _interface_body: ($) =>
+      repeat1(
+        choice(
+          $.property,
+          $.procedure_declaration,
+          $.interface_method
+        )
+      ),
+
+    // Method signature without a body — used in interfaces.
+    interface_method: ($) =>
+      seq(
+        optional(field("access", choice(kw("local"), kw("internal"), kw("protected")))),
+        kw("procedure"),
+        field("name", choice($.identifier, $.quoted_identifier)),
+        "(",
+        field("parameters", optional($.parameter_list)),
+        ")",
+        optional(field("return_type", $.return_type)),
+        optional(";")
+      ),
 
     // ─── Property ────────────────────────────────────────────
 

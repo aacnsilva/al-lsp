@@ -43,6 +43,61 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_interface() {
+        let source = r#"interface ICustomer
+{
+    procedure GetName(): Text;
+    procedure SetName(NewName: Text);
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert_eq!(root.kind(), "source_file");
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+
+        // Verify structure: should have an interface_declaration with 2 procedure_declarations
+        let interface = root.named_child(0).expect("no interface node");
+        assert_eq!(interface.kind(), "interface_declaration");
+    }
+
+    #[test]
+    fn test_parse_address_provider_fixture() {
+        let source = r#"interface IAddressProvider
+{
+    procedure GetAddress(): Text
+}
+
+codeunit 50200 CompanyAddressProvider implements IAddressProvider
+{
+
+    procedure GetAddress(): Text
+    var
+        ExampleAddressLbl: Label 'Company address \ Denmark 2800';
+
+    begin
+        exit(ExampleAddressLbl);
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        eprintln!("S-expr: {}", root.to_sexp());
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_interface_with_property() {
+        let source = r#"interface ICustomer
+{
+    Access = Internal;
+
+    procedure GetOrders(): Integer;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert_eq!(root.kind(), "source_file");
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
     fn test_parse_table() {
         let source = r#"table 50100 "My Table"
 {

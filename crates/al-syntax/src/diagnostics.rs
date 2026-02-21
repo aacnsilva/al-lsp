@@ -82,6 +82,20 @@ mod tests {
     }
 
     #[test]
+    fn test_no_errors_for_interface() {
+        let source = r#"interface ICustomer
+{
+    Access = Internal;
+
+    procedure GetName(): Text;
+    procedure SetName(NewName: Text);
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(diags.is_empty(), "expected no errors for interface, got: {:?}", diags);
+    }
+
+    #[test]
     fn test_errors_for_invalid_code() {
         let source = r#"codeunit 50100 Test
 {
