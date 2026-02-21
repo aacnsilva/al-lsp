@@ -10,14 +10,6 @@ pub fn ts_point_to_lsp_position(point: tree_sitter::Point) -> Position {
     }
 }
 
-/// Convert an LSP `Position` to a tree-sitter `Point`.
-pub fn lsp_position_to_ts_point(pos: Position) -> tree_sitter::Point {
-    tree_sitter::Point {
-        row: pos.line as usize,
-        column: pos.character as usize,
-    }
-}
-
 /// Convert an LSP `Position` to a byte offset in a Rope.
 pub fn lsp_position_to_byte_offset(rope: &ropey::Rope, pos: Position) -> Option<usize> {
     let line = pos.line as usize;

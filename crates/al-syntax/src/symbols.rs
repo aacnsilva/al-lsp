@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast::{AlSymbol, AlSymbolKind};
+use crate::ast::{AlObjectKind, AlSymbol, AlSymbolKind};
 
 /// A case-insensitive index of symbols within a document.
 #[derive(Debug, Default)]
@@ -35,11 +35,7 @@ impl DocumentSymbolTable {
         let key = name.to_lowercase();
         self.index
             .get(&key)
-            .map(|refs| {
-                refs.iter()
-                    .filter_map(|r| self.resolve_ref(r))
-                    .collect()
-            })
+            .map(|refs| refs.iter().filter_map(|r| self.resolve_ref(r)).collect())
             .unwrap_or_default()
     }
 
@@ -132,6 +128,107 @@ impl DocumentSymbolTable {
             .iter()
             .find(|s| matches!(s.kind, AlSymbolKind::Object(_)) && s.name.to_lowercase() == lower)
     }
+
+    /// If the symbol at `byte_offset` is a procedure that belongs to an interface object,
+    /// returns `Some((interface_name, procedure_name))`.
+    pub fn interface_method_at(&self, byte_offset: usize) -> Option<(&str, &str)> {
+        for sym in &self.symbols {
+            if !matches!(sym.kind, AlSymbolKind::Object(AlObjectKind::Interface)) {
+                continue;
+            }
+            if sym.start_byte <= byte_offset && byte_offset <= sym.end_byte {
+                for child in &sym.children {
+                    if matches!(child.kind, AlSymbolKind::Procedure)
+                        && child.start_byte <= byte_offset
+                        && byte_offset <= child.end_byte
+                    {
+                        return Some((&sym.name, &child.name));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Find all codeunits (or other objects) that implement the given interface name.
+    /// For each implementing object, find the child procedure matching `method_name`.
+    /// Returns a list of matching procedure symbols.
+    pub fn find_implementation_procedures(
+        &self,
+        interface_name: &str,
+        method_name: &str,
+    ) -> Vec<&AlSymbol> {
+        let iface_lower = interface_name.to_lowercase();
+        let method_lower = method_name.to_lowercase();
+        let mut results = Vec::new();
+
+        for sym in &self.symbols {
+            if sym
+                .implements
+                .iter()
+                .any(|i| i.to_lowercase() == iface_lower)
+            {
+                for child in &sym.children {
+                    if matches!(child.kind, AlSymbolKind::Procedure)
+                        && child.name.to_lowercase() == method_lower
+                    {
+                        results.push(child);
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    /// If the byte offset is on a procedure inside an object that has `implements`,
+    /// returns `Some((interface_names, procedure_name))` — the list of interface names
+    /// the parent object implements, and the procedure name.
+    pub fn implementation_procedure_at(&self, byte_offset: usize) -> Option<(&[String], &str)> {
+        for sym in &self.symbols {
+            if sym.implements.is_empty() {
+                continue;
+            }
+            if sym.start_byte <= byte_offset && byte_offset <= sym.end_byte {
+                for child in &sym.children {
+                    if matches!(child.kind, AlSymbolKind::Procedure)
+                        && child.start_byte <= byte_offset
+                        && byte_offset <= child.end_byte
+                    {
+                        return Some((&sym.implements, &child.name));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Find a method with the given name inside the given interface object.
+    /// Returns the procedure symbol if found.
+    pub fn find_interface_method(
+        &self,
+        interface_name: &str,
+        method_name: &str,
+    ) -> Option<&AlSymbol> {
+        let iface_lower = interface_name.to_lowercase();
+        let method_lower = method_name.to_lowercase();
+
+        for sym in &self.symbols {
+            if !matches!(sym.kind, AlSymbolKind::Object(AlObjectKind::Interface)) {
+                continue;
+            }
+            if sym.name.to_lowercase() != iface_lower {
+                continue;
+            }
+            for child in &sym.children {
+                if matches!(child.kind, AlSymbolKind::Procedure)
+                    && child.name.to_lowercase() == method_lower
+                {
+                    return Some(child);
+                }
+            }
+        }
+        None
+    }
 }
 
 fn insert_into_index(
@@ -157,13 +254,54 @@ fn insert_into_index(
 /// Return a list of AL language keywords for completion.
 pub fn al_keywords() -> &'static [&'static str] {
     &[
-        "begin", "end", "if", "then", "else", "for", "to", "downto", "do", "while",
-        "repeat", "until", "case", "of", "with", "exit", "var", "procedure", "trigger",
-        "local", "internal", "protected", "true", "false", "not", "and", "or", "xor",
-        "mod", "div", "in", "array", "of", "temporary", "record",
-        "codeunit", "table", "page", "report", "query", "xmlport", "enum",
-        "tableextension", "pageextension", "enumextension",
-        "field", "key", "fieldgroup",
+        "begin",
+        "end",
+        "if",
+        "then",
+        "else",
+        "for",
+        "to",
+        "downto",
+        "do",
+        "while",
+        "repeat",
+        "until",
+        "case",
+        "of",
+        "with",
+        "exit",
+        "var",
+        "procedure",
+        "trigger",
+        "local",
+        "internal",
+        "protected",
+        "true",
+        "false",
+        "not",
+        "and",
+        "or",
+        "xor",
+        "mod",
+        "div",
+        "in",
+        "array",
+        "of",
+        "temporary",
+        "record",
+        "codeunit",
+        "table",
+        "page",
+        "report",
+        "query",
+        "xmlport",
+        "enum",
+        "tableextension",
+        "pageextension",
+        "enumextension",
+        "field",
+        "key",
+        "fieldgroup",
     ]
 }
 
@@ -292,5 +430,98 @@ mod tests {
         let results = table.lookup_in_scope("globalvar", mid);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "GlobalVar");
+    }
+
+    #[test]
+    fn test_interface_method_at() {
+        let source = r#"interface IAddressProvider
+{
+    procedure GetAddress(): Text;
+    procedure SetAddress(NewAddr: Text);
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        // Cursor on "GetAddress" method name
+        let get_addr_offset = source.find("GetAddress").unwrap();
+        let result = table.interface_method_at(get_addr_offset);
+        assert!(result.is_some());
+        let (iface_name, method_name) = result.unwrap();
+        assert_eq!(iface_name, "IAddressProvider");
+        assert_eq!(method_name, "GetAddress");
+
+        // Cursor on "SetAddress" method name
+        let set_addr_offset = source.find("SetAddress").unwrap();
+        let result = table.interface_method_at(set_addr_offset);
+        assert!(result.is_some());
+        let (iface_name, method_name) = result.unwrap();
+        assert_eq!(iface_name, "IAddressProvider");
+        assert_eq!(method_name, "SetAddress");
+
+        // Cursor on interface name itself — not a method
+        let iface_offset = source.find("IAddressProvider").unwrap();
+        let result = table.interface_method_at(iface_offset);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_implementation_procedures() {
+        let source = r#"interface IAddressProvider
+{
+    procedure GetAddress(): Text;
+}
+
+codeunit 50200 CompanyAddressProvider implements IAddressProvider
+{
+    procedure GetAddress(): Text
+    begin
+    end;
+
+    procedure HelperMethod()
+    begin
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        // Should find GetAddress in the implementing codeunit
+        let impls = table.find_implementation_procedures("IAddressProvider", "GetAddress");
+        assert_eq!(impls.len(), 1);
+        assert_eq!(impls[0].name, "GetAddress");
+
+        // Case-insensitive
+        let impls = table.find_implementation_procedures("iaddressprovider", "getaddress");
+        assert_eq!(impls.len(), 1);
+
+        // HelperMethod exists in the implementing codeunit but is not named in the interface.
+        // However, find_implementation_procedures just matches by name in implementing objects,
+        // so it WILL find it. The caller controls which method names to search for.
+        let impls = table.find_implementation_procedures("IAddressProvider", "HelperMethod");
+        assert_eq!(impls.len(), 1);
+
+        // Non-existent interface
+        let impls = table.find_implementation_procedures("INonExistent", "GetAddress");
+        assert_eq!(impls.len(), 0);
+    }
+
+    #[test]
+    fn test_implements_clause_extraction() {
+        let source = r#"codeunit 50200 MyCodeunit implements IFoo, IBar
+{
+    procedure DoSomething()
+    begin
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        assert_eq!(table.symbols.len(), 1);
+        let cu = &table.symbols[0];
+        assert_eq!(cu.implements.len(), 2);
+        assert_eq!(cu.implements[0], "IFoo");
+        assert_eq!(cu.implements[1], "IBar");
     }
 }

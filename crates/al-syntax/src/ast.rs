@@ -91,6 +91,8 @@ pub struct AlSymbol {
     pub name: String,
     pub kind: AlSymbolKind,
     pub type_info: Option<String>,
+    /// For codeunits: the list of interface names from the `implements` clause.
+    pub implements: Vec<String>,
     pub start_byte: usize,
     pub end_byte: usize,
     pub start_point: tree_sitter::Point,
@@ -160,16 +162,40 @@ fn extract_object_symbol(node: Node, source: &str, kind: AlObjectKind) -> Option
 
     extract_children_symbols(node, source, &mut children);
 
+    // Extract implements clause (e.g. `codeunit 50200 Foo implements IBar, IBaz`)
+    let implements = extract_implements_clause(node, source);
+
     Some(AlSymbol {
         name,
         kind: AlSymbolKind::Object(kind),
         type_info: Some(kind.label().to_string()),
+        implements,
         start_byte: node.start_byte(),
         end_byte: node.end_byte(),
         start_point: node.start_position(),
         end_point: node.end_position(),
         children,
     })
+}
+
+/// Extract interface names from an `implements` clause on an object declaration.
+fn extract_implements_clause(node: Node, source: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "implements_clause" {
+            let mut inner = child.walk();
+            for iface_name_node in child.named_children(&mut inner) {
+                match iface_name_node.kind() {
+                    "identifier" | "quoted_identifier" => {
+                        result.push(extract_name(iface_name_node, source));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    result
 }
 
 fn extract_children_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol>) {
@@ -209,9 +235,12 @@ fn extract_procedure_symbol(node: Node, source: &str) -> Option<AlSymbol> {
     let name_node = node.child_by_field_name("name")?;
     let name = extract_name(name_node, source);
 
-    let type_info = node
-        .child_by_field_name("return_type")
-        .map(|rt| node_text(rt, source).trim_start_matches(':').trim().to_string());
+    let type_info = node.child_by_field_name("return_type").map(|rt| {
+        node_text(rt, source)
+            .trim_start_matches(':')
+            .trim()
+            .to_string()
+    });
 
     let mut children = Vec::new();
 
@@ -229,6 +258,7 @@ fn extract_procedure_symbol(node: Node, source: &str) -> Option<AlSymbol> {
         name,
         kind: AlSymbolKind::Procedure,
         type_info,
+        implements: Vec::new(),
         start_byte: node.start_byte(),
         end_byte: node.end_byte(),
         start_point: node.start_position(),
@@ -250,6 +280,7 @@ fn extract_trigger_symbol(node: Node, source: &str) -> Option<AlSymbol> {
         name,
         kind: AlSymbolKind::Trigger,
         type_info: None,
+        implements: Vec::new(),
         start_byte: node.start_byte(),
         end_byte: node.end_byte(),
         start_point: node.start_position(),
@@ -272,6 +303,7 @@ fn extract_var_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol>) {
                     name,
                     kind: AlSymbolKind::Variable,
                     type_info,
+                    implements: Vec::new(),
                     start_byte: child.start_byte(),
                     end_byte: child.end_byte(),
                     start_point: child.start_position(),
@@ -297,6 +329,7 @@ fn extract_parameter_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbo
                     name,
                     kind: AlSymbolKind::Parameter,
                     type_info,
+                    implements: Vec::new(),
                     start_byte: child.start_byte(),
                     end_byte: child.end_byte(),
                     start_point: child.start_position(),
@@ -322,6 +355,7 @@ fn extract_field_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol>) 
                     name,
                     kind: AlSymbolKind::Field,
                     type_info,
+                    implements: Vec::new(),
                     start_byte: child.start_byte(),
                     end_byte: child.end_byte(),
                     start_point: child.start_position(),
@@ -344,6 +378,7 @@ fn extract_key_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol>) {
                     name,
                     kind: AlSymbolKind::Key,
                     type_info: None,
+                    implements: Vec::new(),
                     start_byte: child.start_byte(),
                     end_byte: child.end_byte(),
                     start_point: child.start_position(),
@@ -363,6 +398,7 @@ fn extract_enum_value_symbol(node: Node, source: &str) -> Option<AlSymbol> {
         name,
         kind: AlSymbolKind::EnumValue,
         type_info: None,
+        implements: Vec::new(),
         start_byte: node.start_byte(),
         end_byte: node.end_byte(),
         start_point: node.start_position(),
@@ -398,7 +434,10 @@ mod tests {
         assert_eq!(symbols.len(), 1);
         let obj = &symbols[0];
         assert_eq!(obj.name, "My Codeunit");
-        assert!(matches!(obj.kind, AlSymbolKind::Object(AlObjectKind::Codeunit)));
+        assert!(matches!(
+            obj.kind,
+            AlSymbolKind::Object(AlObjectKind::Codeunit)
+        ));
 
         // GlobalVar, Hello, OnRun
         assert_eq!(obj.children.len(), 3);
@@ -478,7 +517,10 @@ mod tests {
         assert_eq!(symbols.len(), 1);
         let iface = &symbols[0];
         assert_eq!(iface.name, "ICustomer");
-        assert!(matches!(iface.kind, AlSymbolKind::Object(AlObjectKind::Interface)));
+        assert!(matches!(
+            iface.kind,
+            AlSymbolKind::Object(AlObjectKind::Interface)
+        ));
 
         // Two method signatures
         assert_eq!(iface.children.len(), 2);

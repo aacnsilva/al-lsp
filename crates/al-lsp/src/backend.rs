@@ -4,8 +4,8 @@ use tower_lsp::{Client, LanguageServer};
 
 use crate::handlers::{
     completion, document_highlight, document_symbol, document_sync, folding_range,
-    goto_definition, goto_type_definition, hover, references, rename, signature_help,
-    workspace_symbol,
+    goto_definition, goto_implementation, goto_type_definition, hover, references, rename,
+    signature_help, workspace_symbol,
 };
 use crate::state::WorldState;
 
@@ -45,6 +45,7 @@ impl LanguageServer for AlBackend {
                     },
                 }),
                 type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
+                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
@@ -131,6 +132,13 @@ impl LanguageServer for AlBackend {
         params: request::GotoTypeDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
         Ok(goto_type_definition::handle_goto_type_definition(&self.state, params))
+    }
+
+    async fn goto_implementation(
+        &self,
+        params: request::GotoImplementationParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        Ok(goto_implementation::handle_goto_implementation(&self.state, params))
     }
 
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
