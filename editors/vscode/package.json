@@ -1,0 +1,63 @@
+{
+  "name": "al-lsp",
+  "displayName": "AL Language Server",
+  "description": "Language support for AL (Business Central)",
+  "version": "0.1.0",
+  "publisher": "al-lsp",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:al"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "al",
+        "aliases": [
+          "AL",
+          "al"
+        ],
+        "extensions": [
+          ".al"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "al",
+        "scopeName": "source.al",
+        "path": "./syntaxes/al.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "AL Language Server",
+      "properties": {
+        "alLsp.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to al-lsp binary. If empty, uses 'al-lsp' from PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}

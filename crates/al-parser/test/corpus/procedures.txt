@@ -1,0 +1,113 @@
+================================================================================
+Procedure with parameters
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure Add(A: Integer; B: Integer): Integer
+    begin
+        exit(A + B)
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      parameters: (parameter_list
+        (parameter
+          name: (identifier)
+          type: (simple_type
+            (identifier)))
+        (parameter
+          name: (identifier)
+          type: (simple_type
+            (identifier))))
+      return_type: (return_type
+        (simple_type
+          (identifier)))
+      body: (block
+        (exit_statement
+          (additive_expression
+            left: (primary_expression
+              (identifier))
+            right: (primary_expression
+              (identifier))))))))
+
+================================================================================
+Local procedure with var section
+================================================================================
+
+codeunit 50100 Test
+{
+    local procedure DoWork()
+    var
+        Counter: Integer;
+        Name: Text;
+    begin
+        Counter := 0
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      vars: (var_section
+        (variable_declaration
+          name: (identifier)
+          type: (simple_type
+            (identifier)))
+        (variable_declaration
+          name: (identifier)
+          type: (simple_type
+            (identifier))))
+      body: (block
+        (assignment_statement
+          target: (primary_expression
+            (identifier))
+          value: (primary_expression
+            (integer_literal)))))))
+
+================================================================================
+Trigger declaration
+================================================================================
+
+table 50100 Test
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+        }
+    }
+
+    trigger OnInsert()
+    begin
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (table_declaration
+    (integer_literal)
+    (identifier)
+    (fields_section
+      (field_declaration
+        id: (integer_literal)
+        name: (quoted_identifier)
+        type: (sized_type
+          base: (identifier)
+          size: (integer_literal))))
+    (trigger_declaration
+      name: (identifier)
+      body: (block))))

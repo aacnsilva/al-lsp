@@ -1,0 +1,27 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Tree-sitter generated files
+crates/al-parser/src/parser.c
+crates/al-parser/src/tree_sitter/parser.h
+crates/al-parser/node_modules/
+crates/al-parser/build/
+crates/al-parser/log.html
+
+# VS Code extension
+editors/vscode/node_modules/
+editors/vscode/out/
+editors/vscode/*.vsix
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

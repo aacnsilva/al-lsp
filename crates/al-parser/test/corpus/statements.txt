@@ -1,0 +1,247 @@
+================================================================================
+If statement
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure DoIt()
+    begin
+        if X > 0 then
+            X := 1
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      body: (block
+        (if_statement
+          condition: (comparison_expression
+            left: (primary_expression
+              (identifier))
+            right: (primary_expression
+              (integer_literal)))
+          consequence: (assignment_statement
+            target: (primary_expression
+              (identifier))
+            value: (primary_expression
+              (integer_literal))))))))
+
+================================================================================
+If-else statement
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure DoIt()
+    begin
+        if X > 0 then
+            X := 1
+        else
+            X := 2
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      body: (block
+        (if_statement
+          condition: (comparison_expression
+            left: (primary_expression
+              (identifier))
+            right: (primary_expression
+              (integer_literal)))
+          consequence: (assignment_statement
+            target: (primary_expression
+              (identifier))
+            value: (primary_expression
+              (integer_literal)))
+          alternative: (assignment_statement
+            target: (primary_expression
+              (identifier))
+            value: (primary_expression
+              (integer_literal))))))))
+
+================================================================================
+For loop
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure DoIt()
+    var
+        I: Integer;
+    begin
+        for I := 1 to 10 do
+            X := X + 1
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      vars: (var_section
+        (variable_declaration
+          name: (identifier)
+          type: (simple_type
+            (identifier))))
+      body: (block
+        (for_statement
+          variable: (primary_expression
+            (identifier))
+          from: (primary_expression
+            (integer_literal))
+          to: (primary_expression
+            (integer_literal))
+          body: (assignment_statement
+            target: (primary_expression
+              (identifier))
+            value: (additive_expression
+              left: (primary_expression
+                (identifier))
+              right: (primary_expression
+                (integer_literal)))))))))
+
+================================================================================
+While loop
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure DoIt()
+    begin
+        while X > 0 do
+            X := X - 1
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      body: (block
+        (while_statement
+          condition: (comparison_expression
+            left: (primary_expression
+              (identifier))
+            right: (primary_expression
+              (integer_literal)))
+          body: (assignment_statement
+            target: (primary_expression
+              (identifier))
+            value: (additive_expression
+              left: (primary_expression
+                (identifier))
+              right: (primary_expression
+                (integer_literal)))))))))
+
+================================================================================
+Repeat-until loop
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure DoIt()
+    begin
+        repeat
+            X := X + 1;
+        until X > 10
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      body: (block
+        (repeat_statement
+          (assignment_statement
+            target: (primary_expression
+              (identifier))
+            value: (additive_expression
+              left: (primary_expression
+                (identifier))
+              right: (primary_expression
+                (integer_literal))))
+          condition: (comparison_expression
+            left: (primary_expression
+              (identifier))
+            right: (primary_expression
+              (integer_literal))))))))
+
+================================================================================
+Case statement
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure DoIt()
+    begin
+        case X of
+            1:
+                Y := 'one';
+            2:
+                Y := 'two';
+            else
+                Y := 'other';
+        end
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      body: (block
+        (case_statement
+          expression: (primary_expression
+            (identifier))
+          (case_branch
+            (primary_expression
+              (integer_literal))
+            (assignment_statement
+              target: (primary_expression
+                (identifier))
+              value: (primary_expression
+                (string_literal))))
+          (case_branch
+            (primary_expression
+              (integer_literal))
+            (assignment_statement
+              target: (primary_expression
+                (identifier))
+              value: (primary_expression
+                (string_literal))))
+          (assignment_statement
+            target: (primary_expression
+              (identifier))
+            value: (primary_expression
+              (string_literal))))))))

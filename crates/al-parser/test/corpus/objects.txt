@@ -1,0 +1,173 @@
+================================================================================
+Simple codeunit
+================================================================================
+
+codeunit 50100 "My Codeunit"
+{
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (quoted_identifier)))
+
+================================================================================
+Codeunit with procedure
+================================================================================
+
+codeunit 50100 MyCodeunit
+{
+    procedure Hello()
+    begin
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      body: (block))))
+
+================================================================================
+Table with fields
+================================================================================
+
+table 50100 "My Table"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+        }
+        field(2; Name; Text[100])
+        {
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (table_declaration
+    (integer_literal)
+    (quoted_identifier)
+    (fields_section
+      (field_declaration
+        id: (integer_literal)
+        name: (quoted_identifier)
+        type: (sized_type
+          base: (identifier)
+          size: (integer_literal)))
+      (field_declaration
+        id: (integer_literal)
+        name: (identifier)
+        type: (sized_type
+          base: (identifier)
+          size: (integer_literal))))))
+
+================================================================================
+Table with keys
+================================================================================
+
+table 50100 "My Table"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+        }
+    }
+
+    keys
+    {
+        key(PK; "No.")
+        {
+            Clustered = true;
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (table_declaration
+    (integer_literal)
+    (quoted_identifier)
+    (fields_section
+      (field_declaration
+        id: (integer_literal)
+        name: (quoted_identifier)
+        type: (sized_type
+          base: (identifier)
+          size: (integer_literal))))
+    (keys_section
+      (key_declaration
+        name: (identifier)
+        (quoted_identifier)
+        (property
+          name: (identifier)
+          value: (boolean_literal))))))
+
+================================================================================
+Enum declaration
+================================================================================
+
+enum 50100 "Status"
+{
+    value(0; "Open")
+    {
+        Caption = 'Open';
+    }
+    value(1; "Closed")
+    {
+        Caption = 'Closed';
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (integer_literal)
+    (quoted_identifier)
+    (enum_value_declaration
+      id: (integer_literal)
+      name: (quoted_identifier)
+      (property
+        name: (identifier)
+        value: (string_literal)))
+    (enum_value_declaration
+      id: (integer_literal)
+      name: (quoted_identifier)
+      (property
+        name: (identifier)
+        value: (string_literal)))))
+
+================================================================================
+Page declaration
+================================================================================
+
+page 50100 "My Page"
+{
+    PageType = Card;
+    SourceTable = "My Table";
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (integer_literal)
+    (quoted_identifier)
+    (property
+      name: (identifier)
+      value: (identifier))
+    (property
+      name: (identifier)
+      value: (quoted_identifier))))

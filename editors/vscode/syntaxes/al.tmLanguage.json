@@ -1,0 +1,108 @@
+{
+  "name": "AL",
+  "scopeName": "source.al",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#object-types" },
+    { "include": "#types" },
+    { "include": "#operators" },
+    { "include": "#quoted-identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.al",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.al",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.al",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.al",
+              "match": "''"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.al",
+          "match": "\\b\\d+(\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.al",
+          "match": "(?i)\\b(if|then|else|begin|end|for|to|downto|do|while|repeat|until|case|of|exit|with|foreach|in)\\b"
+        },
+        {
+          "name": "keyword.declaration.al",
+          "match": "(?i)\\b(procedure|trigger|local|internal|var|protected|temporary|array|list)\\b"
+        },
+        {
+          "name": "keyword.operator.al",
+          "match": "(?i)\\b(and|or|not|xor|mod|div)\\b"
+        },
+        {
+          "name": "constant.language.al",
+          "match": "(?i)\\b(true|false)\\b"
+        }
+      ]
+    },
+    "object-types": {
+      "patterns": [
+        {
+          "name": "keyword.other.object.al",
+          "match": "(?i)\\b(table|page|codeunit|report|xmlport|query|enum|enumextension|tableextension|pageextension|reportextension|interface|permissionset|permissionsetextension|entitlement|controladdin|profile|pagecustomization)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.al",
+          "match": "(?i)\\b(Integer|BigInteger|Decimal|Text|Code|Boolean|Date|Time|DateTime|Guid|Blob|MediaSet|Media|Option|Record|Enum|Label|TextConst|Char|Byte|Duration|RecordId|RecordRef|FieldRef|KeyRef|Variant|Dialog|File|InStream|OutStream|HttpClient|HttpContent|HttpHeaders|HttpRequestMessage|HttpResponseMessage|JsonToken|JsonValue|JsonArray|JsonObject|XmlDocument|XmlElement|XmlAttribute|XmlNode|Action|TestPage|Notification|ErrorInfo|ModuleDependencyInfo|SecretText)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.al",
+          "match": ":="
+        },
+        {
+          "name": "keyword.operator.comparison.al",
+          "match": "<>|<=|>=|<|>"
+        }
+      ]
+    },
+    "quoted-identifiers": {
+      "patterns": [
+        {
+          "name": "entity.name.tag.al",
+          "match": "\"[^\"]*\""
+        }
+      ]
+    }
+  }
+}

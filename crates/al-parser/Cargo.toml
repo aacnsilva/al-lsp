@@ -1,0 +1,10 @@
+[package]
+name = "al-parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tree-sitter.workspace = true
+
+[build-dependencies]
+cc = "1"

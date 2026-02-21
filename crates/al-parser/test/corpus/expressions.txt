@@ -1,0 +1,136 @@
+================================================================================
+Method call
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure DoIt()
+    begin
+        Rec.SetRange("No.", '1000', '2000')
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      body: (block
+        (expression_statement
+          (method_call
+            object: (primary_expression
+              (identifier))
+            method: (identifier)
+            arguments: (argument_list
+              (primary_expression
+                (quoted_identifier))
+              (primary_expression
+                (string_literal))
+              (primary_expression
+                (string_literal)))))))))
+
+================================================================================
+Function call
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure DoIt()
+    begin
+        Message('Hello %1', Name)
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      body: (block
+        (expression_statement
+          (primary_expression
+            (function_call
+              function: (identifier)
+              arguments: (argument_list
+                (primary_expression
+                  (string_literal))
+                (primary_expression
+                  (identifier))))))))))
+
+================================================================================
+Boolean expression
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure DoIt()
+    begin
+        if (X > 0) and (Y < 10) then
+            Z := true
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      body: (block
+        (if_statement
+          condition: (and_expression
+            left: (primary_expression
+              (parenthesized_expression
+                (comparison_expression
+                  left: (primary_expression
+                    (identifier))
+                  right: (primary_expression
+                    (integer_literal)))))
+            right: (primary_expression
+              (parenthesized_expression
+                (comparison_expression
+                  left: (primary_expression
+                    (identifier))
+                  right: (primary_expression
+                    (integer_literal))))))
+          consequence: (assignment_statement
+            target: (primary_expression
+              (identifier))
+            value: (primary_expression
+              (boolean_literal))))))))
+
+================================================================================
+Record type reference
+================================================================================
+
+codeunit 50100 Test
+{
+    procedure DoIt()
+    var
+        Cust: Record "Customer";
+    begin
+    end;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (codeunit_declaration
+    (integer_literal)
+    (identifier)
+    (procedure_declaration
+      name: (identifier)
+      vars: (var_section
+        (variable_declaration
+          name: (identifier)
+          type: (record_type
+            table: (quoted_identifier))))
+      body: (block))))

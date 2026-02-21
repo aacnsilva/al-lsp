@@ -1,0 +1,30 @@
+{
+  "grammars": [
+    {
+      "name": "al",
+      "camelcase": "Al",
+      "scope": "source.al",
+      "path": ".",
+      "file-types": [
+        "al"
+      ],
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Tree-sitter grammar for AL (Business Central)",
+    "links": {
+      "repository": "https://github.com/tree-sitter/tree-sitter-al"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true
+  }
+}
