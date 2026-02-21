@@ -621,6 +621,10 @@
           "named": true
         },
         {
+          "type": "compound_assignment_statement",
+          "named": true
+        },
+        {
           "type": "exit_statement",
           "named": true
         },
@@ -685,6 +689,10 @@
         },
         {
           "type": "comparison_expression",
+          "named": true
+        },
+        {
+          "type": "compound_assignment_statement",
           "named": true
         },
         {
@@ -819,6 +827,10 @@
         },
         {
           "type": "case_statement",
+          "named": true
+        },
+        {
+          "type": "compound_assignment_statement",
           "named": true
         },
         {
@@ -1028,6 +1040,134 @@
         ]
       },
       "right": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "additive_expression",
+            "named": true
+          },
+          {
+            "type": "and_expression",
+            "named": true
+          },
+          {
+            "type": "array_access",
+            "named": true
+          },
+          {
+            "type": "comparison_expression",
+            "named": true
+          },
+          {
+            "type": "member_access",
+            "named": true
+          },
+          {
+            "type": "method_call",
+            "named": true
+          },
+          {
+            "type": "multiplicative_expression",
+            "named": true
+          },
+          {
+            "type": "negation_expression",
+            "named": true
+          },
+          {
+            "type": "not_expression",
+            "named": true
+          },
+          {
+            "type": "or_expression",
+            "named": true
+          },
+          {
+            "type": "primary_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "compound_assignment_statement",
+    "named": true,
+    "fields": {
+      "operator": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "*=",
+            "named": false
+          },
+          {
+            "type": "+=",
+            "named": false
+          },
+          {
+            "type": "-=",
+            "named": false
+          },
+          {
+            "type": "/=",
+            "named": false
+          }
+        ]
+      },
+      "target": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "additive_expression",
+            "named": true
+          },
+          {
+            "type": "and_expression",
+            "named": true
+          },
+          {
+            "type": "array_access",
+            "named": true
+          },
+          {
+            "type": "comparison_expression",
+            "named": true
+          },
+          {
+            "type": "member_access",
+            "named": true
+          },
+          {
+            "type": "method_call",
+            "named": true
+          },
+          {
+            "type": "multiplicative_expression",
+            "named": true
+          },
+          {
+            "type": "negation_expression",
+            "named": true
+          },
+          {
+            "type": "not_expression",
+            "named": true
+          },
+          {
+            "type": "or_expression",
+            "named": true
+          },
+          {
+            "type": "primary_expression",
+            "named": true
+          }
+        ]
+      },
+      "value": {
         "multiple": false,
         "required": true,
         "types": [
@@ -1619,6 +1759,10 @@
             "named": true
           },
           {
+            "type": "compound_assignment_statement",
+            "named": true
+          },
+          {
             "type": "exit_statement",
             "named": true
           },
@@ -1905,6 +2049,10 @@
             "named": true
           },
           {
+            "type": "compound_assignment_statement",
+            "named": true
+          },
+          {
             "type": "exit_statement",
             "named": true
           },
@@ -1998,6 +2146,10 @@
           },
           {
             "type": "case_statement",
+            "named": true
+          },
+          {
+            "type": "compound_assignment_statement",
             "named": true
           },
           {
@@ -3669,6 +3821,10 @@
           "named": true
         },
         {
+          "type": "compound_assignment_statement",
+          "named": true
+        },
+        {
           "type": "exit_statement",
           "named": true
         },
@@ -4254,6 +4410,10 @@
             "named": true
           },
           {
+            "type": "compound_assignment_statement",
+            "named": true
+          },
+          {
             "type": "exit_statement",
             "named": true
           },
@@ -4369,6 +4529,10 @@
         },
         {
           "type": "comparison_expression",
+          "named": true
+        },
+        {
+          "type": "compound_assignment_statement",
           "named": true
         },
         {
@@ -4530,7 +4694,15 @@
     "named": false
   },
   {
+    "type": "*=",
+    "named": false
+  },
+  {
     "type": "+",
+    "named": false
+  },
+  {
+    "type": "+=",
     "named": false
   },
   {
@@ -4542,11 +4714,19 @@
     "named": false
   },
   {
+    "type": "-=",
+    "named": false
+  },
+  {
     "type": ".",
     "named": false
   },
   {
     "type": "/",
+    "named": false
+  },
+  {
+    "type": "/=",
     "named": false
   },
   {

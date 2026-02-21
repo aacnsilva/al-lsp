@@ -4,6 +4,7 @@ pub mod document_highlight;
 pub mod document_symbol;
 pub mod document_sync;
 pub mod folding_range;
+pub mod formatting;
 pub mod goto_definition;
 pub mod goto_implementation;
 pub mod goto_type_definition;

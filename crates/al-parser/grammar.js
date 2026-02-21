@@ -443,6 +443,7 @@ module.exports = grammar({
     _statement: ($) =>
       choice(
         $.assignment_statement,
+        $.compound_assignment_statement,
         $.expression_statement,
         $.if_statement,
         $.case_statement,
@@ -456,6 +457,13 @@ module.exports = grammar({
 
     assignment_statement: ($) =>
       seq(field("target", $._expression), ":=", field("value", $._expression)),
+
+    compound_assignment_statement: ($) =>
+      seq(
+        field("target", $._expression),
+        field("operator", choice("+=", "-=", "*=", "/=")),
+        field("value", $._expression)
+      ),
 
     expression_statement: ($) => prec(-1, $._expression),
 

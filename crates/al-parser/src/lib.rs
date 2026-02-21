@@ -144,4 +144,31 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
         assert_eq!(root.kind(), "source_file");
         assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
     }
+
+    #[test]
+    fn test_parse_compound_assignment() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        X: Integer;
+    begin
+        X += 1;
+        X -= 2;
+        X *= 3;
+        X /= 4;
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert_eq!(root.kind(), "source_file");
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+
+        // Verify compound_assignment_statement nodes exist
+        let sexp = root.to_sexp();
+        assert!(
+            sexp.contains("compound_assignment_statement"),
+            "expected compound_assignment_statement in tree: {sexp}"
+        );
+    }
 }

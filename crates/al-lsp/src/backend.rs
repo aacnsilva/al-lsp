@@ -3,7 +3,7 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use crate::handlers::{
-    completion, document_highlight, document_symbol, document_sync, folding_range,
+    completion, document_highlight, document_symbol, document_sync, folding_range, formatting,
     goto_definition, goto_implementation, goto_type_definition, hover, references, rename,
     signature_help, workspace_symbol,
 };
@@ -47,6 +47,7 @@ impl LanguageServer for AlBackend {
                 type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
                 implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
@@ -143,6 +144,13 @@ impl LanguageServer for AlBackend {
 
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         Ok(folding_range::handle_folding_range(&self.state, params))
+    }
+
+    async fn formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        Ok(formatting::handle_formatting(&self.state, params))
     }
 
     async fn symbol(

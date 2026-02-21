@@ -44,7 +44,9 @@ impl DocumentState {
     ) {
         // Update rope
         let start_char = self.rope.byte_to_char(start_byte);
-        let old_end_char = self.rope.byte_to_char(old_end_byte.min(self.rope.len_bytes()));
+        let old_end_char = self
+            .rope
+            .byte_to_char(old_end_byte.min(self.rope.len_bytes()));
         self.rope.remove(start_char..old_end_char);
         let new_text_len = new_end_byte - start_byte;
         if new_text_len > 0 {

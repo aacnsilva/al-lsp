@@ -92,7 +92,11 @@ mod tests {
 }"#;
         let tree = al_parser::parse(source).unwrap();
         let diags = extract_diagnostics(&tree, source);
-        assert!(diags.is_empty(), "expected no errors for interface, got: {:?}", diags);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for interface, got: {:?}",
+            diags
+        );
     }
 
     #[test]

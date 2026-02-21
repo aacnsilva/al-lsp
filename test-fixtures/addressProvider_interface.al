@@ -34,8 +34,12 @@ codeunit 50201 CompanyAddressProvider2 implements IAddressProvider
 
     procedure HelloWorld()
     var
+        Counter: Integer;
         IAddressProvider: Interface IAddressProvider;
     begin
         IAddressProvider.GetAddress();
+        repeat
+            Counter += 1;
+        until counter = 0;
     end;
 }
