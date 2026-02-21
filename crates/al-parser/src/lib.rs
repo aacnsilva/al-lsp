@@ -12,14 +12,18 @@ pub fn language() -> Language {
 /// Parse AL source code, returning the tree-sitter [`Tree`].
 pub fn parse(source: &str) -> Option<tree_sitter::Tree> {
     let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&language()).expect("failed to set AL language");
+    parser
+        .set_language(&language())
+        .expect("failed to set AL language");
     parser.parse(source, None)
 }
 
 /// Parse AL source with an old tree for incremental reparsing.
 pub fn parse_with(source: &str, old_tree: Option<&tree_sitter::Tree>) -> Option<tree_sitter::Tree> {
     let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&language()).expect("failed to set AL language");
+    parser
+        .set_language(&language())
+        .expect("failed to set AL language");
     parser.parse(source, old_tree)
 }
 
@@ -75,6 +79,22 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
 
     begin
         exit(ExampleAddressLbl);
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        eprintln!("S-expr: {}", root.to_sexp());
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_variable_of_interface_type() {
+        let source = r#"codeunit 50200 CompanyAddressProvider implements IAddressProvider
+{
+    procedure DoWork()
+    var
+        AddressProvider: Interface IAddressProvider;
+    begin
     end;
 }"#;
         let tree = parse(source).expect("parse failed");

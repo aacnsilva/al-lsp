@@ -464,6 +464,10 @@
           "named": true
         },
         {
+          "type": "interface_type",
+          "named": true
+        },
+        {
           "type": "label_type",
           "named": true
         },
@@ -1485,6 +1489,10 @@
             "named": true
           },
           {
+            "type": "interface_type",
+            "named": true
+          },
+          {
             "type": "label_type",
             "named": true
           },
@@ -2115,6 +2123,26 @@
     }
   },
   {
+    "type": "interface_type",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "key_declaration",
     "named": true,
     "fields": {
@@ -2235,6 +2263,10 @@
         },
         {
           "type": "enum_type",
+          "named": true
+        },
+        {
+          "type": "interface_type",
           "named": true
         },
         {
@@ -3009,6 +3041,10 @@
           },
           {
             "type": "enum_type",
+            "named": true
+          },
+          {
+            "type": "interface_type",
             "named": true
           },
           {
@@ -3825,6 +3861,10 @@
           "named": true
         },
         {
+          "type": "interface_type",
+          "named": true
+        },
+        {
           "type": "label_type",
           "named": true
         },
@@ -4159,6 +4199,10 @@
           },
           {
             "type": "enum_type",
+            "named": true
+          },
+          {
+            "type": "interface_type",
             "named": true
           },
           {

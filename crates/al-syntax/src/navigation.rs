@@ -187,6 +187,28 @@ fn is_definition_node(node: Node) -> bool {
     false
 }
 
+/// Check if an identifier node is the `method` field of a `method_call`
+/// or the `member` field of a `member_access`. Such identifiers are qualified
+/// by their object and should not be resolved as unqualified same-scope references.
+fn is_qualified_member(node: Node) -> bool {
+    if let Some(parent) = node.parent() {
+        match parent.kind() {
+            "method_call" => {
+                if let Some(method) = parent.child_by_field_name("method") {
+                    return method.id() == node.id();
+                }
+            }
+            "member_access" => {
+                if let Some(member) = parent.child_by_field_name("member") {
+                    return member.id() == node.id();
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Find all references to the same symbol as the identifier at `byte_offset`.
 /// Walks the entire tree, collecting identifier nodes that match the name and resolve
 /// to the same definition (via `lookup_in_scope` per candidate to respect shadowing).
@@ -234,6 +256,12 @@ pub fn find_all_references(
             return;
         }
 
+        // Skip identifiers that are the method/member of a qualified access
+        // (e.g. `Foo.Bar()` — `Bar` is not an unqualified reference to a same-scope symbol)
+        if is_qualified_member(node) {
+            return;
+        }
+
         // Resolve this candidate to see if it points to the same definition
         let candidates = symbol_table.lookup_in_scope(&node_name, node.start_byte());
         if let Some(resolved) = candidates.into_iter().next() {
@@ -247,8 +275,12 @@ pub fn find_all_references(
 }
 
 /// Walk tree and call `callback` for each identifier/quoted_identifier node matching `target_name_lower`.
-fn collect_identifier_nodes<'a, F>(node: Node<'a>, source: &str, target_name_lower: &str, callback: &mut F)
-where
+fn collect_identifier_nodes<'a, F>(
+    node: Node<'a>,
+    source: &str,
+    target_name_lower: &str,
+    callback: &mut F,
+) where
     F: FnMut(Node<'a>),
 {
     match node.kind() {
@@ -291,7 +323,8 @@ pub fn find_call_context<'a>(
     }
 
     // Find the function name
-    let name_node = node.child_by_field_name("name")
+    let name_node = node
+        .child_by_field_name("name")
         .or_else(|| node.child_by_field_name("method"))?;
     let function_name = extract_name(name_node, source);
 
@@ -345,7 +378,14 @@ pub fn extract_type_object_name(type_info: &str) -> Option<&str> {
     // Handle: Record "Customer", Record Customer, etc.
     // Common AL type patterns: Record X, Codeunit X, Page X, ...
     let prefixes = [
-        "Record", "Codeunit", "Page", "Report", "Query", "Xmlport", "Enum", "Interface",
+        "Record",
+        "Codeunit",
+        "Page",
+        "Report",
+        "Query",
+        "Xmlport",
+        "Enum",
+        "Interface",
     ];
 
     for prefix in &prefixes {
@@ -429,6 +469,95 @@ fn collect_folding_ranges_recursive(node: Node, ranges: &mut Vec<FoldingArea>) {
     }
 }
 
+/// Find all call sites of a method on variables typed as a specific interface.
+///
+/// Walks the parse tree looking for `method_call` nodes where:
+/// - The `method` field matches `method_name` (case-insensitive)
+/// - The `object` field resolves to a variable whose `type_info` is `Interface <interface_name>`
+///
+/// Returns the start/end points of the `method` identifier node for each matching call.
+pub fn find_interface_method_calls(
+    tree: &Tree,
+    source: &str,
+    symbol_table: &DocumentSymbolTable,
+    interface_name: &str,
+    method_name: &str,
+) -> Vec<(tree_sitter::Point, tree_sitter::Point)> {
+    let iface_lower = interface_name.to_lowercase();
+    let method_lower = method_name.to_lowercase();
+    let mut results = Vec::new();
+
+    collect_method_calls(
+        tree.root_node(),
+        source,
+        symbol_table,
+        &iface_lower,
+        &method_lower,
+        &mut results,
+    );
+
+    results
+}
+
+fn collect_method_calls(
+    node: Node,
+    source: &str,
+    symbol_table: &DocumentSymbolTable,
+    iface_lower: &str,
+    method_lower: &str,
+    results: &mut Vec<(tree_sitter::Point, tree_sitter::Point)>,
+) {
+    if node.kind() == "method_call" {
+        if let (Some(method_node), Some(object_node)) = (
+            node.child_by_field_name("method"),
+            node.child_by_field_name("object"),
+        ) {
+            let call_method = extract_name(method_node, source);
+            if call_method.to_lowercase() == *method_lower {
+                // Resolve the object to check if it's typed as the target interface
+                let obj_name = extract_name(object_node, source);
+                let candidates = symbol_table.lookup_in_scope(&obj_name, node.start_byte());
+                for sym in candidates {
+                    if matches!(sym.kind, AlSymbolKind::Variable | AlSymbolKind::Parameter) {
+                        if let Some(ref type_info) = sym.type_info {
+                            if is_interface_type(type_info, iface_lower) {
+                                results.push((
+                                    method_node.start_position(),
+                                    method_node.end_position(),
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_method_calls(
+            child,
+            source,
+            symbol_table,
+            iface_lower,
+            method_lower,
+            results,
+        );
+    }
+}
+
+/// Check if a type_info string refers to a specific interface (case-insensitive).
+/// Matches "Interface IFoo" against interface name "IFoo".
+fn is_interface_type(type_info: &str, iface_name_lower: &str) -> bool {
+    let lower = type_info.trim().to_lowercase();
+    if let Some(rest) = lower.strip_prefix("interface ") {
+        let name = rest.trim().trim_matches('"');
+        return name == iface_name_lower;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,10 +630,7 @@ mod tests {
         let resolved = resolve_at_offset(&tree, source, &table, begin_offset);
         // begin is a keyword, not an identifier, so no resolution
         // (depending on parse tree, it may or may not be a named node)
-        assert!(
-            resolved.is_none(),
-            "should not resolve keyword 'begin'"
-        );
+        assert!(resolved.is_none(), "should not resolve keyword 'begin'");
     }
 
     #[test]
@@ -574,13 +700,19 @@ mod tests {
         let table = DocumentSymbolTable::new(symbols);
 
         // From the first usage of MyVar
-        let usage_offset = source[source.find("begin").unwrap()..].find("MyVar").unwrap()
+        let usage_offset = source[source.find("begin").unwrap()..]
+            .find("MyVar")
+            .unwrap()
             + source.find("begin").unwrap();
 
         // With declaration
         let refs = find_all_references(&tree, source, &table, usage_offset, true);
         // declaration + 3 usages = 4
-        assert!(refs.len() >= 3, "expected at least 3 refs, got {}", refs.len());
+        assert!(
+            refs.len() >= 3,
+            "expected at least 3 refs, got {}",
+            refs.len()
+        );
 
         // Without declaration
         let refs_no_decl = find_all_references(&tree, source, &table, usage_offset, false);
@@ -589,9 +721,18 @@ mod tests {
 
     #[test]
     fn test_extract_type_object_name() {
-        assert_eq!(extract_type_object_name("Record \"Customer\""), Some("Customer"));
-        assert_eq!(extract_type_object_name("Record Customer"), Some("Customer"));
-        assert_eq!(extract_type_object_name("Codeunit \"Sales Mgt.\""), Some("Sales Mgt."));
+        assert_eq!(
+            extract_type_object_name("Record \"Customer\""),
+            Some("Customer")
+        );
+        assert_eq!(
+            extract_type_object_name("Record Customer"),
+            Some("Customer")
+        );
+        assert_eq!(
+            extract_type_object_name("Codeunit \"Sales Mgt.\""),
+            Some("Sales Mgt.")
+        );
         assert_eq!(extract_type_object_name("Integer"), None);
         assert_eq!(extract_type_object_name("Text[100]"), None);
     }
@@ -613,7 +754,11 @@ mod tests {
         let tree = al_parser::parse(source).unwrap();
         let ranges = collect_folding_ranges(&tree);
         // At minimum: the codeunit and the two procedures
-        assert!(ranges.len() >= 3, "expected at least 3 folding ranges, got {}", ranges.len());
+        assert!(
+            ranges.len() >= 3,
+            "expected at least 3 folding ranges, got {}",
+            ranges.len()
+        );
         assert!(ranges.iter().all(|r| r.end_line > r.start_line));
     }
 }

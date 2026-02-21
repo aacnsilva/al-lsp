@@ -668,6 +668,7 @@ module.exports = grammar({
         $.sized_type,
         $.record_type,
         $.enum_type,
+        $.interface_type,
         $.list_type,
         $.array_type,
         $.option_type,
@@ -694,6 +695,9 @@ module.exports = grammar({
 
     enum_type: ($) =>
       seq(kw("enum"), field("name", choice($.identifier, $.quoted_identifier))),
+
+    interface_type: ($) =>
+      seq(kw("interface"), field("name", choice($.identifier, $.quoted_identifier))),
 
     list_type: ($) =>
       seq(kw("list"), kw("of"), "[", $._type_reference, "]"),

@@ -3312,6 +3312,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "interface_type"
+        },
+        {
+          "type": "SYMBOL",
           "name": "list_type"
         },
         {
@@ -3418,6 +3422,32 @@
         {
           "type": "PATTERN",
           "value": "[eE][nN][uU][mM]"
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "quoted_identifier"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "interface_type": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "PATTERN",
+          "value": "[iI][nN][tT][eE][rR][fF][aA][cC][eE]"
         },
         {
           "type": "FIELD",

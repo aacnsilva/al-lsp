@@ -1,6 +1,9 @@
 use lsp_types::{Location, ReferenceParams};
 
-use al_syntax::navigation::find_all_references;
+use al_syntax::ast::AlSymbolKind;
+use al_syntax::navigation::{
+    find_all_references, find_interface_method_calls, identifier_context_at_offset,
+};
 
 use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
 use crate::state::WorldState;
@@ -30,14 +33,54 @@ pub fn handle_references(state: &WorldState, params: ReferenceParams) -> Option<
         })
         .collect();
 
+    // Determine what the cursor is actually on. Only enter interface/impl paths
+    // when the cursor is on a Procedure identifier.
+    let cursor_on_procedure =
+        identifier_context_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)
+            .and_then(|ctx| ctx.symbol)
+            .is_some_and(|sym| matches!(sym.kind, AlSymbolKind::Procedure));
+
+    if !cursor_on_procedure {
+        // Not on a procedure identifier — return standard same-document references only.
+        if locations.is_empty() {
+            return None;
+        }
+        return Some(locations);
+    }
+
+    // If cursor is on an interface method, search all documents for call sites
+    // where a variable typed as this interface invokes this method.
+    if let Some((interface_name, method_name)) = doc.symbol_table.interface_method_at(byte_offset) {
+        let interface_name = interface_name.to_string();
+        let method_name = method_name.to_string();
+        drop(doc);
+
+        for entry in state.documents.iter() {
+            let other_doc = entry.value();
+            let other_source = other_doc.source();
+            let calls = find_interface_method_calls(
+                &other_doc.tree,
+                &other_source,
+                &other_doc.symbol_table,
+                &interface_name,
+                &method_name,
+            );
+            for (start, end) in calls {
+                locations.push(Location {
+                    uri: entry.key().clone(),
+                    range: ts_range_to_lsp_range(start, end),
+                });
+            }
+        }
+    }
     // If cursor is on a procedure inside a codeunit that implements interfaces,
     // also include the interface method definition as a reference.
-    if let Some((iface_names, method_name)) =
+    else if let Some((iface_names, method_name)) =
         doc.symbol_table.implementation_procedure_at(byte_offset)
     {
         let iface_names: Vec<String> = iface_names.to_vec();
         let method_name = method_name.to_string();
-        drop(doc); // Release the DashMap ref before iterating
+        drop(doc);
 
         for entry in state.documents.iter() {
             let other_doc = entry.value();
@@ -92,6 +135,47 @@ mod tests {
         }
     }
 
+    fn full_example_source() -> &'static str {
+        r#"interface IAddressProvider
+{
+    procedure GetAddress(): Text;
+}
+
+codeunit 50200 CompanyAddressProvider implements IAddressProvider
+{
+    procedure GetAddress(): Text
+    var
+        ExampleAddressLbl: Label 'Company address \ Denmark 2800';
+    begin
+        exit(ExampleAddressLbl);
+    end;
+
+    procedure HelloWorld()
+    var
+        AddressProvider: Interface IAddressProvider;
+    begin
+        AddressProvider.GetAddress();
+    end;
+}
+
+codeunit 50201 CompanyAddressProvider2 implements IAddressProvider
+{
+    procedure GetAddress(): Text
+    var
+        ExampleAddressLbl: Label 'Company address \ Denmark 2800';
+    begin
+        exit(ExampleAddressLbl);
+    end;
+
+    procedure HelloWorld()
+    var
+        IAddressProvider: Interface IAddressProvider;
+    begin
+        IAddressProvider.GetAddress();
+    end;
+}"#
+    }
+
     #[test]
     fn test_references_impl_procedure_includes_interface_method() {
         // Cursor on GetAddress in the CODEUNIT -> references should include
@@ -132,9 +216,41 @@ mod tests {
     }
 
     #[test]
-    fn test_references_interface_method_does_not_include_impls() {
-        // Cursor on GetAddress in the INTERFACE -> references should NOT include
-        // implementing procedures (use Go to Implementation for that).
+    fn test_references_interface_method_finds_call_sites() {
+        // Cursor on GetAddress in the INTERFACE -> references should include
+        // the call sites AddressProvider.GetAddress() in the codeunits.
+        let source = full_example_source();
+        let uri = Url::parse("file:///test/all.al").unwrap();
+
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        // Cursor on "GetAddress" in the interface (line 2, col 14), include declaration
+        let params = make_ref_params(uri.clone(), 2, 14, true);
+        let result = handle_references(&state, params);
+
+        assert!(result.is_some(), "expected references to return results");
+        let locs = result.unwrap();
+
+        let call_site_lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+        eprintln!("interface method reference lines: {call_site_lines:?}");
+
+        // The two calls: AddressProvider.GetAddress() and IAddressProvider.GetAddress()
+        assert!(
+            call_site_lines.contains(&18),
+            "expected call site on line 18, got: {call_site_lines:?}"
+        );
+        assert!(
+            call_site_lines.contains(&35),
+            "expected call site on line 35, got: {call_site_lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_references_interface_method_cross_doc() {
+        // Interface and codeunits in separate documents.
         let iface_source = r#"interface IAddressProvider
 {
     procedure GetAddress(): Text;
@@ -143,6 +259,13 @@ mod tests {
 {
     procedure GetAddress(): Text
     begin
+    end;
+
+    procedure HelloWorld()
+    var
+        AddressProvider: Interface IAddressProvider;
+    begin
+        AddressProvider.GetAddress();
     end;
 }"#;
         let iface_uri = Url::parse("file:///test/iface.al").unwrap();
@@ -156,16 +279,86 @@ mod tests {
             .documents
             .insert(impl_uri.clone(), DocumentState::new(impl_source).unwrap());
 
-        // Cursor on "GetAddress" in the interface (line 2, col 14), include declaration
+        // Cursor on "GetAddress" in the interface (line 2, col 14)
         let params = make_ref_params(iface_uri.clone(), 2, 14, true);
         let result = handle_references(&state, params);
 
-        // Should only have same-document references (the declaration itself), not impl procedures
-        if let Some(locs) = &result {
-            assert!(
-                !locs.iter().any(|l| l.uri == impl_uri),
-                "did NOT expect impl procedures in references, got: {locs:?}"
-            );
-        }
+        assert!(result.is_some(), "expected references to return results");
+        let locs = result.unwrap();
+
+        // Should find the call site in the impl document
+        assert!(
+            locs.iter().any(|l| l.uri == impl_uri),
+            "expected a call-site reference in the impl document, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_references_variable_in_impl_codeunit_no_interface_leak() {
+        // Cursor on ExampleAddressLbl inside a codeunit that implements an interface.
+        // References should only show same-document usages of ExampleAddressLbl,
+        // NOT the interface method.
+        let source = full_example_source();
+        let uri = Url::parse("file:///test/all.al").unwrap();
+
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        // Cursor on "ExampleAddressLbl" in the var declaration (line 9, col 8)
+        let params = make_ref_params(uri.clone(), 9, 8, true);
+        let result = handle_references(&state, params);
+
+        assert!(
+            result.is_some(),
+            "expected references for ExampleAddressLbl"
+        );
+        let locs = result.unwrap();
+        let lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+        eprintln!("ExampleAddressLbl reference lines: {lines:?}");
+
+        // Should only contain the declaration (line 9) and usage (line 11)
+        // Should NOT contain the interface method line (line 2)
+        assert!(
+            !lines.contains(&2),
+            "ExampleAddressLbl references should NOT include the interface method, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_references_impl_getaddress_no_interface_call_sites() {
+        // Cursor on GetAddress in the implementing codeunit.
+        // References should include the interface method definition,
+        // but NOT the call site AddressProvider.GetAddress() (which calls via the interface).
+        let source = full_example_source();
+        let uri = Url::parse("file:///test/all.al").unwrap();
+
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        // Cursor on "GetAddress" in the first codeunit's procedure (line 7, col 14)
+        let params = make_ref_params(uri.clone(), 7, 14, true);
+        let result = handle_references(&state, params);
+
+        assert!(result.is_some(), "expected references for impl GetAddress");
+        let locs = result.unwrap();
+        let lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+        eprintln!("impl GetAddress reference lines: {lines:?}");
+
+        // Should include the interface method (line 2)
+        assert!(
+            lines.contains(&2),
+            "expected interface method (line 2) in references, got: {lines:?}"
+        );
+
+        // Should NOT include AddressProvider.GetAddress() call site (line 18)
+        // — that's a call via the interface, not a direct call to this implementation
+        assert!(
+            !lines.contains(&18),
+            "impl GetAddress references should NOT include interface call site (line 18), got: {lines:?}"
+        );
     }
 }

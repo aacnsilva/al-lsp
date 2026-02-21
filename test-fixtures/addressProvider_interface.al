@@ -18,6 +18,7 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
         AddressProvider: Interface IAddressProvider;
     begin
         AddressProvider.GetAddress();
+        GetAddress();
     end;
 }
 
@@ -31,10 +32,10 @@ codeunit 50201 CompanyAddressProvider2 implements IAddressProvider
         exit(ExampleAddressLbl);
     end;
 
-    // procedure HelloWorld()
-    // var
-    //     IAddressProvider: Interface IAddressProvider;
-    // begin
-    //     IAddressProvider.GetAddress();
-    // end;
+    procedure HelloWorld()
+    var
+        IAddressProvider: Interface IAddressProvider;
+    begin
+        IAddressProvider.GetAddress();
+    end;
 }
