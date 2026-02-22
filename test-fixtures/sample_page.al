@@ -30,8 +30,11 @@ page 50100 "Customer Card"
             {
                 Caption = 'Print';
                 trigger OnAction()
+                var
+                    AddressProvider: Interface IAddressProvider;
                 begin
                     Message('Printing...');
+                    AddressProvider.GetAddress();
                 end;
             }
         }

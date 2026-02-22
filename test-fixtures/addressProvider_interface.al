@@ -16,8 +16,10 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
     procedure HelloWorld()
     var
         AddressProvider: Interface IAddressProvider;
+        CompanyAddressProvider2: codeunit CompanyAddressProvider2;
     begin
         AddressProvider.GetAddress();
+        CompanyAddressProvider2.HelloWorld2();
         GetAddress();
     end;
 }
@@ -25,14 +27,14 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
 codeunit 50201 CompanyAddressProvider2 implements IAddressProvider
 {
 
-    procedure GetAddress(): Text
+    procedure GetAddress2(): Text
     var
         ExampleAddressLbl: Label 'Company address \ Denmark 2800';
     begin
         exit(ExampleAddressLbl);
     end;
 
-    procedure HelloWorld()
+    procedure HelloWorld2()
     var
         Counter: Integer;
         IAddressProvider: Interface IAddressProvider;

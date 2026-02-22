@@ -9,6 +9,10 @@ fn main() {
         );
     }
 
+    // Ensure cargo rebuilds when the generated parser changes
+    println!("cargo:rerun-if-changed=src/parser.c");
+    println!("cargo:rerun-if-changed=grammar.js");
+
     let mut build = cc::Build::new();
     build
         .include(src_dir)

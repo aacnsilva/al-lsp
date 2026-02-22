@@ -452,10 +452,6 @@
           "named": true
         },
         {
-          "type": "codeunit_type",
-          "named": true
-        },
-        {
           "type": "dotnet_type",
           "named": true
         },
@@ -484,19 +480,7 @@
           "named": true
         },
         {
-          "type": "page_type",
-          "named": true
-        },
-        {
-          "type": "query_type",
-          "named": true
-        },
-        {
           "type": "record_type",
-          "named": true
-        },
-        {
-          "type": "report_type",
           "named": true
         },
         {
@@ -505,10 +489,6 @@
         },
         {
           "type": "sized_type",
-          "named": true
-        },
-        {
-          "type": "xmlport_type",
           "named": true
         }
       ]
@@ -973,26 +953,6 @@
           "named": true
         }
       ]
-    }
-  },
-  {
-    "type": "codeunit_type",
-    "named": true,
-    "fields": {
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "quoted_identifier",
-            "named": true
-          }
-        ]
-      }
     }
   },
   {
@@ -1661,10 +1621,6 @@
             "named": true
           },
           {
-            "type": "codeunit_type",
-            "named": true
-          },
-          {
             "type": "dotnet_type",
             "named": true
           },
@@ -1689,19 +1645,7 @@
             "named": true
           },
           {
-            "type": "page_type",
-            "named": true
-          },
-          {
-            "type": "query_type",
-            "named": true
-          },
-          {
             "type": "record_type",
-            "named": true
-          },
-          {
-            "type": "report_type",
             "named": true
           },
           {
@@ -1710,10 +1654,6 @@
           },
           {
             "type": "sized_type",
-            "named": true
-          },
-          {
-            "type": "xmlport_type",
             "named": true
           }
         ]
@@ -2470,10 +2410,6 @@
           "named": true
         },
         {
-          "type": "codeunit_type",
-          "named": true
-        },
-        {
           "type": "dotnet_type",
           "named": true
         },
@@ -2498,19 +2434,7 @@
           "named": true
         },
         {
-          "type": "page_type",
-          "named": true
-        },
-        {
-          "type": "query_type",
-          "named": true
-        },
-        {
           "type": "record_type",
-          "named": true
-        },
-        {
-          "type": "report_type",
           "named": true
         },
         {
@@ -2519,10 +2443,6 @@
         },
         {
           "type": "sized_type",
-          "named": true
-        },
-        {
-          "type": "xmlport_type",
           "named": true
         }
       ]
@@ -3242,26 +3162,6 @@
     }
   },
   {
-    "type": "page_type",
-    "named": true,
-    "fields": {
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "quoted_identifier",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "parameter",
     "named": true,
     "fields": {
@@ -3285,10 +3185,6 @@
         "types": [
           {
             "type": "array_type",
-            "named": true
-          },
-          {
-            "type": "codeunit_type",
             "named": true
           },
           {
@@ -3316,19 +3212,7 @@
             "named": true
           },
           {
-            "type": "page_type",
-            "named": true
-          },
-          {
-            "type": "query_type",
-            "named": true
-          },
-          {
             "type": "record_type",
-            "named": true
-          },
-          {
-            "type": "report_type",
             "named": true
           },
           {
@@ -3337,10 +3221,6 @@
           },
           {
             "type": "sized_type",
-            "named": true
-          },
-          {
-            "type": "xmlport_type",
             "named": true
           }
         ]
@@ -3758,10 +3638,6 @@
         {
           "type": "identifier",
           "named": true
-        },
-        {
-          "type": "quoted_identifier",
-          "named": true
         }
       ]
     }
@@ -3851,26 +3727,6 @@
           "named": true
         }
       ]
-    }
-  },
-  {
-    "type": "query_type",
-    "named": true,
-    "fields": {
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "quoted_identifier",
-            "named": true
-          }
-        ]
-      }
     }
   },
   {
@@ -4141,26 +3997,6 @@
     }
   },
   {
-    "type": "report_type",
-    "named": true,
-    "fields": {
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "quoted_identifier",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "return_type",
     "named": true,
     "fields": {},
@@ -4170,10 +4006,6 @@
       "types": [
         {
           "type": "array_type",
-          "named": true
-        },
-        {
-          "type": "codeunit_type",
           "named": true
         },
         {
@@ -4201,19 +4033,7 @@
           "named": true
         },
         {
-          "type": "page_type",
-          "named": true
-        },
-        {
-          "type": "query_type",
-          "named": true
-        },
-        {
           "type": "record_type",
-          "named": true
-        },
-        {
-          "type": "report_type",
           "named": true
         },
         {
@@ -4222,10 +4042,6 @@
         },
         {
           "type": "sized_type",
-          "named": true
-        },
-        {
-          "type": "xmlport_type",
           "named": true
         }
       ]
@@ -4534,10 +4350,6 @@
             "named": true
           },
           {
-            "type": "codeunit_type",
-            "named": true
-          },
-          {
             "type": "dotnet_type",
             "named": true
           },
@@ -4562,19 +4374,7 @@
             "named": true
           },
           {
-            "type": "page_type",
-            "named": true
-          },
-          {
-            "type": "query_type",
-            "named": true
-          },
-          {
             "type": "record_type",
-            "named": true
-          },
-          {
-            "type": "report_type",
             "named": true
           },
           {
@@ -4583,10 +4383,6 @@
           },
           {
             "type": "sized_type",
-            "named": true
-          },
-          {
-            "type": "xmlport_type",
             "named": true
           }
         ]
@@ -4883,26 +4679,6 @@
           "named": true
         }
       ]
-    }
-  },
-  {
-    "type": "xmlport_type",
-    "named": true,
-    "fields": {
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "quoted_identifier",
-            "named": true
-          }
-        ]
-      }
     }
   },
   {

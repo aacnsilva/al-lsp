@@ -97,6 +97,10 @@ pub struct AlSymbol {
     pub end_byte: usize,
     pub start_point: tree_sitter::Point,
     pub end_point: tree_sitter::Point,
+    /// Start position of the name identifier node (for rename edits).
+    pub name_start_point: tree_sitter::Point,
+    /// End position of the name identifier node (for rename edits).
+    pub name_end_point: tree_sitter::Point,
     pub children: Vec<AlSymbol>,
 }
 
@@ -119,12 +123,13 @@ pub fn extract_name(node: Node, source: &str) -> String {
 /// Find the name node of an object declaration.
 /// Object declarations have the name as the first identifier or quoted_identifier child
 /// (after the integer_literal for the object ID).
-fn find_object_name(node: Node, source: &str) -> Option<String> {
+/// Returns (name, name_start_point, name_end_point).
+fn find_object_name(node: Node, source: &str) -> Option<(String, tree_sitter::Point, tree_sitter::Point)> {
     for i in 0..node.named_child_count() {
         if let Some(child) = node.named_child(i) {
             match child.kind() {
                 "identifier" | "quoted_identifier" => {
-                    return Some(extract_name(child, source));
+                    return Some((extract_name(child, source), child.start_position(), child.end_position()));
                 }
                 _ => continue,
             }
@@ -157,7 +162,7 @@ pub fn extract_symbols(tree: &Tree, source: &str) -> Vec<AlSymbol> {
 }
 
 fn extract_object_symbol(node: Node, source: &str, kind: AlObjectKind) -> Option<AlSymbol> {
-    let name = find_object_name(node, source)?;
+    let (name, name_start, name_end) = find_object_name(node, source)?;
     let mut children = Vec::new();
 
     extract_children_symbols(node, source, &mut children);
@@ -174,6 +179,8 @@ fn extract_object_symbol(node: Node, source: &str, kind: AlObjectKind) -> Option
         end_byte: node.end_byte(),
         start_point: node.start_position(),
         end_point: node.end_position(),
+        name_start_point: name_start,
+        name_end_point: name_end,
         children,
     })
 }
@@ -263,6 +270,8 @@ fn extract_procedure_symbol(node: Node, source: &str) -> Option<AlSymbol> {
         end_byte: node.end_byte(),
         start_point: node.start_position(),
         end_point: node.end_position(),
+        name_start_point: name_node.start_position(),
+        name_end_point: name_node.end_position(),
         children,
     })
 }
@@ -285,6 +294,8 @@ fn extract_trigger_symbol(node: Node, source: &str) -> Option<AlSymbol> {
         end_byte: node.end_byte(),
         start_point: node.start_position(),
         end_point: node.end_position(),
+        name_start_point: name_node.start_position(),
+        name_end_point: name_node.end_position(),
         children,
     })
 }
@@ -293,21 +304,26 @@ fn extract_var_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol>) {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         if child.kind() == "variable_declaration" {
-            if let Some(name_node) = child.child_by_field_name("name") {
+            let type_info = child
+                .child_by_field_name("type")
+                .map(|t| extract_type_info(t, source));
+
+            // A variable_declaration can have multiple `name` fields (e.g. `A, B : Integer;`)
+            let mut field_cursor = child.walk();
+            for name_node in child.children_by_field_name("name", &mut field_cursor) {
                 let name = extract_name(name_node, source);
-                let type_info = child
-                    .child_by_field_name("type")
-                    .map(|t| extract_type_info(t, source));
 
                 symbols.push(AlSymbol {
                     name,
                     kind: AlSymbolKind::Variable,
-                    type_info,
+                    type_info: type_info.clone(),
                     implements: Vec::new(),
                     start_byte: child.start_byte(),
                     end_byte: child.end_byte(),
                     start_point: child.start_position(),
                     end_point: child.end_position(),
+                    name_start_point: name_node.start_position(),
+                    name_end_point: name_node.end_position(),
                     children: Vec::new(),
                 });
             }
@@ -334,6 +350,8 @@ fn extract_parameter_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbo
                     end_byte: child.end_byte(),
                     start_point: child.start_position(),
                     end_point: child.end_position(),
+                    name_start_point: name_node.start_position(),
+                    name_end_point: name_node.end_position(),
                     children: Vec::new(),
                 });
             }
@@ -360,6 +378,8 @@ fn extract_field_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol>) 
                     end_byte: child.end_byte(),
                     start_point: child.start_position(),
                     end_point: child.end_position(),
+                    name_start_point: name_node.start_position(),
+                    name_end_point: name_node.end_position(),
                     children: Vec::new(),
                 });
             }
@@ -383,6 +403,8 @@ fn extract_key_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol>) {
                     end_byte: child.end_byte(),
                     start_point: child.start_position(),
                     end_point: child.end_position(),
+                    name_start_point: name_node.start_position(),
+                    name_end_point: name_node.end_position(),
                     children: Vec::new(),
                 });
             }
@@ -403,6 +425,8 @@ fn extract_enum_value_symbol(node: Node, source: &str) -> Option<AlSymbol> {
         end_byte: node.end_byte(),
         start_point: node.start_position(),
         end_point: node.end_position(),
+        name_start_point: name_node.start_position(),
+        name_end_point: name_node.end_position(),
         children: Vec::new(),
     })
 }
@@ -532,5 +556,46 @@ mod tests {
         // SetName has a parameter
         assert_eq!(iface.children[1].children.len(), 1);
         assert_eq!(iface.children[1].children[0].name, "NewName");
+    }
+
+    #[test]
+    fn test_extract_multi_name_variable_declaration() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        LineRec, NewLine: Record "LSC POS Trans. Line";
+        X: Integer;
+    begin
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+
+        let symbols = extract_symbols(&tree, source);
+        let proc = &symbols[0].children[0]; // DoWork
+        assert_eq!(proc.name, "DoWork");
+
+        // Should have 3 variables: LineRec, NewLine, X
+        assert_eq!(
+            proc.children.len(),
+            3,
+            "expected 3 variables (LineRec, NewLine, X), got: {:?}",
+            proc.children.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+
+        assert_eq!(proc.children[0].name, "LineRec");
+        assert_eq!(
+            proc.children[0].type_info.as_deref(),
+            Some("Record \"LSC POS Trans. Line\"")
+        );
+        assert_eq!(proc.children[1].name, "NewLine");
+        assert_eq!(
+            proc.children[1].type_info.as_deref(),
+            Some("Record \"LSC POS Trans. Line\"")
+        );
+        assert_eq!(proc.children[2].name, "X");
+        assert_eq!(proc.children[2].type_info.as_deref(), Some("Integer"));
     }
 }

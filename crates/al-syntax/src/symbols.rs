@@ -202,6 +202,55 @@ impl DocumentSymbolTable {
         None
     }
 
+    /// If the byte offset is on a procedure inside a codeunit (or other non-interface object),
+    /// returns `Some((object_name, procedure_name))`.
+    pub fn codeunit_procedure_at(&self, byte_offset: usize) -> Option<(&str, &str)> {
+        for sym in &self.symbols {
+            // Skip interfaces — they have their own handler
+            if matches!(sym.kind, AlSymbolKind::Object(AlObjectKind::Interface)) {
+                continue;
+            }
+            if sym.start_byte <= byte_offset && byte_offset <= sym.end_byte {
+                for child in &sym.children {
+                    if matches!(child.kind, AlSymbolKind::Procedure)
+                        && child.start_byte <= byte_offset
+                        && byte_offset <= child.end_byte
+                    {
+                        return Some((&sym.name, &child.name));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Find a procedure by name inside a named object (case-insensitive).
+    pub fn find_object_procedure(
+        &self,
+        object_name: &str,
+        procedure_name: &str,
+    ) -> Option<&AlSymbol> {
+        let obj_lower = object_name.to_lowercase();
+        let proc_lower = procedure_name.to_lowercase();
+
+        for sym in &self.symbols {
+            if !matches!(sym.kind, AlSymbolKind::Object(_)) {
+                continue;
+            }
+            if sym.name.to_lowercase() != obj_lower {
+                continue;
+            }
+            for child in &sym.children {
+                if matches!(child.kind, AlSymbolKind::Procedure)
+                    && child.name.to_lowercase() == proc_lower
+                {
+                    return Some(child);
+                }
+            }
+        }
+        None
+    }
+
     /// Find a method with the given name inside the given interface object.
     /// Returns the procedure symbol if found.
     pub fn find_interface_method(

@@ -47,8 +47,12 @@ pub async fn handle_did_change(
     }
 }
 
-pub async fn handle_did_close(state: &WorldState, params: DidCloseTextDocumentParams) {
-    state.documents.remove(&params.text_document.uri);
+pub async fn handle_did_close(_state: &WorldState, params: DidCloseTextDocumentParams) {
+    // Don't remove the document — it may be needed for cross-document features
+    // (rename, references, go-to-definition). The workspace scanner loaded it from
+    // disk, and closing a tab shouldn't discard that knowledge.
+    // The file watcher (didChangeWatchedFiles) handles actual deletions.
+    let _ = &params.text_document.uri;
 }
 
 fn offset_from_position(rope: &ropey::Rope, pos: lsp_types::Position) -> Option<usize> {

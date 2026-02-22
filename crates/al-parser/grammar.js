@@ -419,7 +419,7 @@ module.exports = grammar({
 
     variable_declaration: ($) =>
       seq(
-        field("name", choice($.identifier, $.quoted_identifier)),
+        commaSep1(field("name", choice($.identifier, $.quoted_identifier))),
         ":",
         field("type", $._type_reference),
         ";"
@@ -664,7 +664,7 @@ module.exports = grammar({
       ),
 
     qualified_enum_value: ($) =>
-      prec.left(7, seq($.identifier, "::", $.identifier)),
+      prec.left(7, seq(choice($.identifier, $.quoted_identifier), "::", $.identifier)),
 
     argument_list: ($) => commaSep1($._expression),
 
@@ -675,6 +675,11 @@ module.exports = grammar({
         $.simple_type,
         $.sized_type,
         $.record_type,
+        $.codeunit_type,
+        $.page_type,
+        $.report_type,
+        $.query_type,
+        $.xmlport_type,
         $.enum_type,
         $.interface_type,
         $.list_type,
@@ -700,6 +705,21 @@ module.exports = grammar({
         field("table", choice($.identifier, $.quoted_identifier)),
         optional(kw("temporary"))
       ),
+
+    codeunit_type: ($) =>
+      seq(kw("codeunit"), field("name", choice($.identifier, $.quoted_identifier))),
+
+    page_type: ($) =>
+      seq(kw("page"), field("name", choice($.identifier, $.quoted_identifier))),
+
+    report_type: ($) =>
+      seq(kw("report"), field("name", choice($.identifier, $.quoted_identifier))),
+
+    query_type: ($) =>
+      seq(kw("query"), field("name", choice($.identifier, $.quoted_identifier))),
+
+    xmlport_type: ($) =>
+      seq(kw("xmlport"), field("name", choice($.identifier, $.quoted_identifier))),
 
     enum_type: ($) =>
       seq(kw("enum"), field("name", choice($.identifier, $.quoted_identifier))),

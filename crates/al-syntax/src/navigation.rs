@@ -598,6 +598,180 @@ fn collect_method_calls(
     }
 }
 
+/// When the cursor is on the `method` part of a `method_call` (e.g. the `HelloWorld2`
+/// in `CompanyAddressProvider2.HelloWorld2()`), check whether the object is a variable
+/// typed as a codeunit. If so, return `(codeunit_name, method_name)`.
+pub fn codeunit_method_call_at_offset(
+    tree: &Tree,
+    source: &str,
+    symbol_table: &DocumentSymbolTable,
+    byte_offset: usize,
+) -> Option<(String, String)> {
+    let node = node_at_offset(tree, byte_offset)?;
+
+    match node.kind() {
+        "identifier" | "quoted_identifier" => {}
+        _ => return None,
+    }
+
+    let parent = node.parent()?;
+    if parent.kind() != "method_call" {
+        return None;
+    }
+    let method_node = parent.child_by_field_name("method")?;
+    if method_node.id() != node.id() {
+        return None;
+    }
+
+    let object_node = parent.child_by_field_name("object")?;
+    let obj_name = extract_name(object_node, source);
+    let candidates = symbol_table.lookup_in_scope(&obj_name, parent.start_byte());
+
+    for sym in candidates {
+        if matches!(sym.kind, AlSymbolKind::Variable | AlSymbolKind::Parameter) {
+            if let Some(ref type_info) = sym.type_info {
+                if let Some(cu_name) = extract_codeunit_type_name(type_info) {
+                    let method_name = extract_name(node, source);
+                    return Some((cu_name.to_string(), method_name));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract the codeunit name from a type_info string like "Codeunit CompanyAddressProvider2"
+/// or "Codeunit \"Some Name\"". Returns None if not a codeunit type.
+fn extract_codeunit_type_name(type_info: &str) -> Option<&str> {
+    let trimmed = type_info.trim();
+    let lower = trimmed.to_lowercase();
+    if lower.strip_prefix("codeunit ").is_some() {
+        let offset = "codeunit ".len();
+        let rest = trimmed[offset..].trim();
+        if rest.is_empty() {
+            return None;
+        }
+        let name = rest.trim_matches('"');
+        if name.is_empty() {
+            return None;
+        }
+        return Some(name);
+    }
+    None
+}
+
+/// Find all call sites of a method on variables typed as a specific codeunit.
+pub fn find_codeunit_method_calls(
+    tree: &Tree,
+    source: &str,
+    symbol_table: &DocumentSymbolTable,
+    codeunit_name: &str,
+    method_name: &str,
+) -> Vec<(tree_sitter::Point, tree_sitter::Point)> {
+    let cu_lower = codeunit_name.to_lowercase();
+    let method_lower = method_name.to_lowercase();
+    let mut results = Vec::new();
+
+    collect_codeunit_method_calls(
+        tree.root_node(),
+        source,
+        symbol_table,
+        &cu_lower,
+        &method_lower,
+        &mut results,
+    );
+
+    results
+}
+
+fn collect_codeunit_method_calls(
+    node: Node,
+    source: &str,
+    symbol_table: &DocumentSymbolTable,
+    cu_lower: &str,
+    method_lower: &str,
+    results: &mut Vec<(tree_sitter::Point, tree_sitter::Point)>,
+) {
+    if node.kind() == "method_call" {
+        if let (Some(method_node), Some(object_node)) = (
+            node.child_by_field_name("method"),
+            node.child_by_field_name("object"),
+        ) {
+            let call_method = extract_name(method_node, source);
+            if call_method.to_lowercase() == *method_lower {
+                let obj_name = extract_name(object_node, source);
+                let candidates = symbol_table.lookup_in_scope(&obj_name, node.start_byte());
+                for sym in candidates {
+                    if matches!(sym.kind, AlSymbolKind::Variable | AlSymbolKind::Parameter) {
+                        if let Some(ref type_info) = sym.type_info {
+                            if is_codeunit_type(type_info, cu_lower) {
+                                results.push((
+                                    method_node.start_position(),
+                                    method_node.end_position(),
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Also check for direct (unqualified) function calls matching the method name
+    if node.kind() == "function_call" {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            let call_name = extract_name(name_node, source);
+            if call_name.to_lowercase() == *method_lower {
+                // Check if the call is inside the same codeunit
+                // by seeing if the caller's enclosing object matches
+                if is_inside_object(node, source, cu_lower) {
+                    results.push((name_node.start_position(), name_node.end_position()));
+                }
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_codeunit_method_calls(child, source, symbol_table, cu_lower, method_lower, results);
+    }
+}
+
+/// Check if a node is inside an object (codeunit, table, etc.) with the given name.
+fn is_inside_object(node: Node, source: &str, object_name_lower: &str) -> bool {
+    let mut current = Some(node);
+    while let Some(n) = current {
+        let kind = n.kind();
+        if kind.ends_with("_declaration") && kind != "procedure_declaration" && kind != "variable_declaration" && kind != "trigger_declaration" && kind != "parameter" && kind != "field_declaration" && kind != "key_declaration" && kind != "enum_value_declaration" {
+            // This is an object declaration — check its name
+            if let Some(name_node) = n.child_by_field_name("name") {
+                let name = extract_name(name_node, source);
+                return name.to_lowercase() == object_name_lower;
+            }
+            // For objects with integer + name pattern, find the identifier child
+            let mut cursor = n.walk();
+            for child in n.named_children(&mut cursor) {
+                if child.kind() == "identifier" || child.kind() == "quoted_identifier" {
+                    let name = extract_name(child, source);
+                    return name.to_lowercase() == object_name_lower;
+                }
+            }
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// Check if a type_info string refers to a specific codeunit (case-insensitive).
+fn is_codeunit_type(type_info: &str, cu_name_lower: &str) -> bool {
+    if let Some(name) = extract_codeunit_type_name(type_info) {
+        return name.to_lowercase() == *cu_name_lower;
+    }
+    false
+}
+
 /// Check if a type_info string refers to a specific interface (case-insensitive).
 /// Matches "Interface IFoo" against interface name "IFoo".
 fn is_interface_type(type_info: &str, iface_name_lower: &str) -> bool {

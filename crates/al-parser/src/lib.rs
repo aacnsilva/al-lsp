@@ -171,4 +171,57 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
             "expected compound_assignment_statement in tree: {sexp}"
         );
     }
+
+    #[test]
+    fn test_parse_codeunit_type_variable() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        ServiceLocator: Codeunit "LSC Service Locator";
+        MyPage: Page "Customer Card";
+        MyReport: Report "Sales Invoice";
+    begin
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_quoted_enum_value() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        X: Integer;
+    begin
+        X := "My Enum"::MyValue;
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+        let sexp = root.to_sexp();
+        assert!(
+            sexp.contains("qualified_enum_value"),
+            "expected qualified_enum_value in tree: {sexp}"
+        );
+    }
+
+    #[test]
+    fn test_parse_multi_name_variable() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        LineRec, NewLine: Record "LSC POS Trans. Line";
+    begin
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
 }
