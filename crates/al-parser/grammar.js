@@ -32,7 +32,7 @@ function semiSep1(rule) {
 module.exports = grammar({
   name: "al",
 
-  extras: ($) => [/\s/, $.line_comment, $.block_comment],
+  extras: ($) => [/\s/, $.line_comment, $.block_comment, $.region_directive, $.pragma_directive],
 
   // NOTE: We do NOT use the `word` property because our keywords are
   // case-insensitive regexes (kw()), and tree-sitter's keyword extraction
@@ -40,6 +40,7 @@ module.exports = grammar({
 
   conflicts: ($) => [
     [$.var_section],
+    [$.simple_type, $.sized_type],
   ],
 
   rules: {
@@ -177,7 +178,6 @@ module.exports = grammar({
       repeat1(
         choice(
           $.property,
-          $.procedure_declaration,
           $.interface_method
         )
       ),
@@ -185,6 +185,7 @@ module.exports = grammar({
     // Method signature without a body — used in interfaces.
     interface_method: ($) =>
       seq(
+        repeat($.attribute),
         optional(field("access", choice(kw("local"), kw("internal"), kw("protected")))),
         kw("procedure"),
         field("name", choice($.identifier, $.quoted_identifier)),
@@ -192,7 +193,7 @@ module.exports = grammar({
         field("parameters", optional($.parameter_list)),
         ")",
         optional(field("return_type", $.return_type)),
-        optional(";")
+        ";"
       ),
 
     // ─── Property ────────────────────────────────────────────
@@ -207,6 +208,9 @@ module.exports = grammar({
 
     _property_value: ($) =>
       choice(
+        $.table_relation_expression,
+        $.calc_formula_expression,
+        $.property_option_value,
         $.string_literal,
         $.integer_literal,
         $.decimal_literal,
@@ -218,6 +222,107 @@ module.exports = grammar({
         // Property list: field1, field2
         commaSep1(choice($.identifier, $.quoted_identifier))
       ),
+
+    property_option_value: ($) =>
+      seq($.string_literal, repeat1(seq(",", $.property_option_assignment))),
+
+    property_option_assignment: ($) =>
+      seq(
+        choice($.identifier, $.quoted_identifier),
+        "=",
+        choice(
+          $.string_literal,
+          $.integer_literal,
+          $.decimal_literal,
+          $.boolean_literal,
+          $.identifier,
+          $.quoted_identifier
+        )
+      ),
+
+    table_relation_expression: ($) =>
+      choice(
+        seq(
+          field("relation", $.member_access),
+          optional(field("where", $.where_clause))
+        ),
+        seq(
+          field("relation", choice($.identifier, $.quoted_identifier)),
+          field("where", $.where_clause)
+        )
+      ),
+
+    calc_formula_expression: ($) =>
+      seq(
+        field(
+          "method",
+          choice(
+            kw("lookup"),
+            kw("sum"),
+            kw("average"),
+            kw("count"),
+            kw("exist"),
+            kw("min"),
+            kw("max")
+          )
+        ),
+        "(",
+        field("source", $._relation_target),
+        optional(field("where", $.where_clause)),
+        ")"
+      ),
+
+    _relation_target: ($) =>
+      choice($.member_access, $.identifier, $.quoted_identifier),
+
+    where_clause: ($) =>
+      seq(kw("where"), "(", commaSep1($.where_condition), ")"),
+
+    where_condition: ($) =>
+      seq(
+        field("field", choice($.identifier, $.quoted_identifier)),
+        "=",
+        field("value", $.where_value_expression)
+      ),
+
+    where_value_expression: ($) =>
+      choice($.field_reference, $.const_reference, $.filter_reference),
+
+    field_reference: ($) =>
+      seq(
+        kw("field"),
+        "(",
+        field("name", choice($.identifier, $.quoted_identifier)),
+        ")"
+      ),
+
+    const_reference: ($) =>
+      seq(
+        kw("const"),
+        "(",
+        field("value", $._const_value),
+        ")"
+      ),
+
+    _const_value: ($) =>
+      choice(
+        $.string_literal,
+        $.integer_literal,
+        $.decimal_literal,
+        $.boolean_literal,
+        $.identifier,
+        $.quoted_identifier
+      ),
+
+    filter_reference: ($) =>
+      seq(
+        kw("filter"),
+        "(",
+        field("pattern", $.filter_pattern),
+        ")"
+      ),
+
+    filter_pattern: ($) => token(prec(1, /([^)]|'[^']*')+/)),
 
     // ─── Fields section (tables) ─────────────────────────────
 
@@ -373,10 +478,19 @@ module.exports = grammar({
         "}"
       ),
 
+    // ─── Attributes ─────────────────────────────────────────
+
+    attribute: ($) =>
+      seq("[", $.identifier, optional(seq("(", $.attribute_arguments, ")")), "]"),
+
+    attribute_arguments: ($) =>
+      commaSep1(choice($.string_literal, $.identifier, $.integer_literal)),
+
     // ─── Procedures & triggers ───────────────────────────────
 
     procedure_declaration: ($) =>
       seq(
+        repeat($.attribute),
         optional(field("access", choice(kw("local"), kw("internal"), kw("protected")))),
         kw("procedure"),
         field("name", choice($.identifier, $.quoted_identifier)),
@@ -384,12 +498,14 @@ module.exports = grammar({
         field("parameters", optional($.parameter_list)),
         ")",
         optional(field("return_type", $.return_type)),
+        optional(";"),
         optional(field("vars", $.var_section)),
         field("body", $.block)
       ),
 
     trigger_declaration: ($) =>
       seq(
+        repeat($.attribute),
         kw("trigger"),
         field("name", choice($.identifier, $.quoted_identifier)),
         "(",
@@ -410,7 +526,15 @@ module.exports = grammar({
         field("type", $._type_reference)
       ),
 
-    return_type: ($) => seq(":", $._type_reference),
+    return_type: ($) =>
+      choice(
+        seq(":", field("type", $._type_reference)),
+        seq(
+          field("name", choice($.identifier, $.quoted_identifier)),
+          ":",
+          field("type", $._type_reference)
+        )
+      ),
 
     // ─── Variable declarations ───────────────────────────────
 
@@ -419,6 +543,7 @@ module.exports = grammar({
 
     variable_declaration: ($) =>
       seq(
+        repeat($.attribute),
         commaSep1(field("name", choice($.identifier, $.quoted_identifier))),
         ":",
         field("type", $._type_reference),
@@ -473,7 +598,7 @@ module.exports = grammar({
           kw("if"),
           field("condition", $._expression),
           kw("then"),
-          field("consequence", $._statement),
+          optional(field("consequence", $._statement)),
           optional(seq(kw("else"), field("alternative", $._statement)))
         )
       ),
@@ -527,59 +652,85 @@ module.exports = grammar({
 
     // ─── Expressions ─────────────────────────────────────────
 
-    _expression: ($) =>
-      choice(
-        $.or_expression,
-        $._unary_expression
+    _expression: ($) => $.conditional_expression,
+
+    conditional_expression: ($) =>
+      prec.right(
+        seq(
+          field("condition", $.or_expression),
+          optional(
+            seq(
+              "?",
+              field("consequence", $._expression),
+              ":",
+              field("alternative", $._expression)
+            )
+          )
+        )
       ),
 
     or_expression: ($) =>
-      prec.left(
-        1,
-        seq(
-          field("left", $._expression),
-          field("operator", choice(kw("or"), kw("xor"))),
-          field("right", $._expression)
+      choice(
+        $.and_expression,
+        prec.left(
+          1,
+          seq(
+            field("left", $.or_expression),
+            field("operator", choice(kw("or"), kw("xor"))),
+            field("right", $.and_expression)
+          )
         )
       ),
 
     and_expression: ($) =>
-      prec.left(
-        2,
-        seq(
-          field("left", $._expression),
-          field("operator", kw("and")),
-          field("right", $._expression)
+      choice(
+        $.comparison_expression,
+        prec.left(
+          2,
+          seq(
+            field("left", $.and_expression),
+            field("operator", kw("and")),
+            field("right", $.comparison_expression)
+          )
         )
       ),
 
     comparison_expression: ($) =>
-      prec.left(
-        3,
-        seq(
-          field("left", $._expression),
-          field("operator", choice("=", "<>", "<", ">", "<=", ">=")),
-          field("right", $._expression)
+      choice(
+        $.additive_expression,
+        prec.left(
+          3,
+          seq(
+            field("left", $.additive_expression),
+            field("operator", choice("=", "<>", "<", ">", "<=", ">=", kw("in"))),
+            field("right", $.additive_expression)
+          )
         )
       ),
 
     additive_expression: ($) =>
-      prec.left(
-        4,
-        seq(
-          field("left", $._expression),
-          field("operator", choice("+", "-")),
-          field("right", $._expression)
+      choice(
+        $.multiplicative_expression,
+        prec.left(
+          4,
+          seq(
+            field("left", $.additive_expression),
+            field("operator", choice("+", "-")),
+            field("right", $.multiplicative_expression)
+          )
         )
       ),
 
     multiplicative_expression: ($) =>
-      prec.left(
-        5,
-        seq(
-          field("left", $._expression),
-          field("operator", choice("*", "/", kw("mod"), kw("div"))),
-          field("right", $._expression)
+      choice(
+        $._unary_expression,
+        prec.left(
+          5,
+          seq(
+            field("left", $.multiplicative_expression),
+            field("operator", choice("*", "/", kw("mod"), kw("div"))),
+            field("right", $._unary_expression)
+          )
         )
       ),
 
@@ -587,18 +738,14 @@ module.exports = grammar({
       choice(
         $.not_expression,
         $.negation_expression,
-        $.and_expression,
-        $.comparison_expression,
-        $.additive_expression,
-        $.multiplicative_expression,
         $._postfix_expression
       ),
 
     not_expression: ($) =>
-      prec(6, seq(kw("not"), $._expression)),
+      prec.right(6, seq(kw("not"), $._unary_expression)),
 
     negation_expression: ($) =>
-      prec(6, seq("-", $._postfix_expression)),
+      prec.right(6, seq("-", $._unary_expression)),
 
     _postfix_expression: ($) =>
       choice(
@@ -645,10 +792,15 @@ module.exports = grammar({
         $.integer_literal,
         $.decimal_literal,
         $.boolean_literal,
+        $.list_literal,
         $.parenthesized_expression,
         $.function_call,
-        $.qualified_enum_value
+        $.qualified_enum_value,
+        $.qualified_object_reference
       ),
+
+    list_literal: ($) =>
+      seq("[", commaSep1($._expression), "]"),
 
     parenthesized_expression: ($) => seq("(", $._expression, ")"),
 
@@ -664,7 +816,68 @@ module.exports = grammar({
       ),
 
     qualified_enum_value: ($) =>
-      prec.left(7, seq(choice($.identifier, $.quoted_identifier), "::", $.identifier)),
+      choice(
+        prec.left(
+          8,
+          seq(
+            field(
+              "enum",
+              choice(
+                $.identifier,
+                $.quoted_identifier,
+                $.member_access,
+                $.enum_qualified_name
+              )
+            ),
+            "::",
+            field("value", choice($.identifier, $.quoted_identifier))
+          )
+        ),
+        prec.left(
+          7,
+          seq(
+            field(
+              "enum",
+              choice(
+                $.identifier,
+                $.quoted_identifier,
+                $.member_access,
+                $.enum_qualified_name
+              )
+            ),
+            "::"
+          )
+        )
+      ),
+
+    qualified_object_reference: ($) =>
+      prec.left(
+        7,
+        seq(
+          field(
+            "kind",
+            choice(
+              kw("enum"),
+              kw("codeunit"),
+              kw("table"),
+              kw("page"),
+              kw("report"),
+              kw("query"),
+              kw("xmlport"),
+              kw("interface")
+            )
+          ),
+          "::",
+          field("name", choice($.identifier, $.quoted_identifier))
+        )
+      ),
+
+    enum_qualified_name: ($) =>
+      seq(
+        kw("enum"),
+        "::",
+        field("name", choice($.identifier, $.quoted_identifier))
+      ),
 
     argument_list: ($) => commaSep1($._expression),
 
@@ -741,10 +954,34 @@ module.exports = grammar({
       ),
 
     option_type: ($) =>
-      seq(kw("option"), choice($.identifier, $.quoted_identifier), repeat(seq(",", choice($.identifier, $.quoted_identifier)))),
+      prec.right(
+        seq(
+          kw("option"),
+          optional(
+            seq(
+              choice($.identifier, $.quoted_identifier),
+              repeat(seq(",", choice($.identifier, $.quoted_identifier)))
+            )
+          )
+        )
+      ),
 
     label_type: ($) =>
-      seq(kw("label"), $.string_literal),
+      seq(kw("label"), $.string_literal, repeat(seq(",", $.label_option))),
+
+    label_option: ($) =>
+      seq(
+        choice($.identifier, $.quoted_identifier),
+        "=",
+        choice(
+          $.string_literal,
+          $.integer_literal,
+          $.decimal_literal,
+          $.boolean_literal,
+          $.identifier,
+          $.quoted_identifier
+        )
+      ),
 
     dotnet_type: ($) =>
       seq(kw("dotnet"), $.string_literal),
@@ -755,7 +992,8 @@ module.exports = grammar({
 
     quoted_identifier: ($) => /"[^"]*"/,
 
-    string_literal: ($) => /'[^']*'/,
+    // AL strings escape single quote as doubled single quote: ''.
+    string_literal: ($) => /'([^']|'')*'/,
 
     integer_literal: ($) => /\d+/,
 
@@ -770,5 +1008,16 @@ module.exports = grammar({
     line_comment: ($) => token(seq("//", /.*/)),
 
     block_comment: ($) => token(seq("/*", /[^*]*\*+([^/*][^*]*\*+)*/, "/")),
+
+    region_directive: ($) =>
+      token(
+        choice(
+          seq(/#[rR][eE][gG][iI][oO][nN]/, /.*/),
+          seq(/#[eE][nN][dD][rR][eE][gG][iI][oO][nN]/, /.*/)
+        )
+      ),
+
+    pragma_directive: ($) =>
+      token(seq(/#[pP][rR][aA][gG][mM][aA]/, /.*/)),
   },
 });

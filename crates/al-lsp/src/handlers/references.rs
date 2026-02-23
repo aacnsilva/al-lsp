@@ -6,6 +6,9 @@ use al_syntax::navigation::{
     find_interface_method_calls, identifier_context_at_offset, interface_method_call_at_offset,
 };
 
+use crate::handlers::completion::{
+    enum_value_target_at_offset, enum_value_usages_in_tree, resolve_enum_name_from_context,
+};
 use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
 use crate::state::WorldState;
 
@@ -17,6 +20,64 @@ pub fn handle_references(state: &WorldState, params: ReferenceParams) -> Option<
     let doc = state.documents.get(&uri)?;
     let byte_offset = lsp_position_to_byte_offset(&doc.rope, position)?;
     let source = doc.source();
+
+    if let Some((enum_name, value_name)) =
+        enum_value_target_at_offset(state, &uri, &doc.tree, &source, byte_offset)
+    {
+        drop(doc);
+        let mut locations = Vec::new();
+
+        for entry in state.documents.iter() {
+            let other_doc = entry.value();
+            let other_source = other_doc.source();
+
+            if include_declaration {
+                for object in &other_doc.symbol_table.symbols {
+                    if let AlSymbolKind::Object(kind) = object.kind {
+                        if kind.label() != "enum" || !object.name.eq_ignore_ascii_case(&enum_name) {
+                            continue;
+                        }
+                        for child in &object.children {
+                            if matches!(child.kind, AlSymbolKind::EnumValue)
+                                && child.name.eq_ignore_ascii_case(&value_name)
+                            {
+                                locations.push(Location {
+                                    uri: entry.key().clone(),
+                                    range: ts_range_to_lsp_range(
+                                        child.name_start_point,
+                                        child.name_end_point,
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            for usage in enum_value_usages_in_tree(&other_doc.tree, &other_source) {
+                if !usage.value_name.eq_ignore_ascii_case(&value_name) {
+                    continue;
+                }
+                let Some(usage_enum_name) =
+                    resolve_enum_name_from_context(state, entry.key(), &usage.context)
+                else {
+                    continue;
+                };
+                if !usage_enum_name.eq_ignore_ascii_case(&enum_name) {
+                    continue;
+                }
+                locations.push(Location {
+                    uri: entry.key().clone(),
+                    range: ts_range_to_lsp_range(usage.start, usage.end),
+                });
+            }
+        }
+
+        if locations.is_empty() {
+            return None;
+        }
+        return Some(locations);
+    }
 
     // First, check if the cursor is on the method part of an interface-typed method call
     // (e.g. `AddressProvider.GetAddress()` where AddressProvider is `Interface IAddressProvider`).
@@ -691,5 +752,155 @@ codeunit 50201 CompanyAddressProvider2 implements IAddressProvider
             lines.contains(&34),
             "expected procedure definition on line 34, got: {lines:?}"
         );
+    }
+
+    #[test]
+    fn test_references_enum_value_from_qualified_usage() {
+        let source = r#"enum 50100 MyEnum
+{
+    value(0; First)
+    {
+    }
+    value(1; Second)
+    {
+    }
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        X: Integer;
+    begin
+        X := MyEnum::First;
+        X := MyEnum::Second;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        // Cursor on `First` in `MyEnum::First` (line 16, col 21)
+        let params = make_ref_params(uri, 16, 21, true);
+        let result = handle_references(&state, params);
+        assert!(result.is_some(), "expected enum value references");
+        let locs = result.unwrap();
+        let lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+
+        // Declaration and matching usage should be present.
+        assert!(
+            lines.contains(&2),
+            "expected enum value declaration on line 2, got: {lines:?}"
+        );
+        assert!(
+            lines.contains(&16),
+            "expected usage on line 16, got: {lines:?}"
+        );
+        // Non-matching enum value usage should not be included.
+        assert!(
+            !lines.contains(&17),
+            "did not expect usage of Second on line 17, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_references_enum_value_from_record_field_usage() {
+        let enum_source = r#"enum 50100 "Document Type"
+{
+    value(0; Order)
+    {
+    }
+    value(1; Invoice)
+    {
+    }
+}"#;
+        let table_source = r#"table 50100 "Sales Header"
+{
+    fields
+    {
+        field(1; "Document Type"; Enum "Document Type")
+        {
+        }
+    }
+}"#;
+        let codeunit_source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Rec: Record "Sales Header";
+    begin
+        if Rec."Document Type" = Rec."Document Type"::Order then;
+    end;
+}"#;
+
+        let enum_uri = Url::parse("file:///test/enum.al").unwrap();
+        let table_uri = Url::parse("file:///test/table.al").unwrap();
+        let codeunit_uri = Url::parse("file:///test/test.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(enum_uri.clone(), DocumentState::new(enum_source).unwrap());
+        state
+            .documents
+            .insert(table_uri, DocumentState::new(table_source).unwrap());
+        state.documents.insert(
+            codeunit_uri.clone(),
+            DocumentState::new(codeunit_source).unwrap(),
+        );
+
+        // Cursor on `Order` in `Rec."Document Type"::Order` (line 6, col 47)
+        let params = make_ref_params(codeunit_uri, 6, 47, true);
+        let result = handle_references(&state, params);
+        assert!(
+            result.is_some(),
+            "expected enum value references from record field usage"
+        );
+        let locs = result.unwrap();
+        assert!(
+            locs.iter().any(|l| l.uri == enum_uri),
+            "expected declaration location in enum document, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_references_enum_value_from_declaration() {
+        let source = r#"enum 50100 MyEnum
+{
+    value(0; First)
+    {
+    }
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        X: Integer;
+    begin
+        X := MyEnum::First;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        // Cursor on `First` in enum declaration `value(0; First)` (line 2).
+        let params = make_ref_params(uri, 2, 13, true);
+        let result = handle_references(&state, params);
+        assert!(
+            result.is_some(),
+            "expected enum value references from declaration"
+        );
+        let locs = result.unwrap();
+        let lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+        assert!(
+            lines.contains(&2),
+            "expected declaration on line 2, got: {lines:?}"
+        );
+        assert!(lines.contains(&13), "expected usage on line 13, got: {lines:?}");
     }
 }

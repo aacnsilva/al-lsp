@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use dashmap::DashMap;
@@ -21,6 +22,7 @@ impl WorldState {
     }
 
     /// Scan workspace roots for `.al` files and load them into the document map.
+    /// Also loads `.al` files from `.app` archives in `.alpackages/`.
     /// Skips files that are already loaded (e.g. opened via did_open).
     pub fn load_workspace_files(&self) -> usize {
         let roots = self.workspace_roots.lock().unwrap().clone();
@@ -32,6 +34,106 @@ impl WorldState {
         for root in &roots {
             tracing::info!("scanning workspace root: {}", root.display());
             count += self.scan_directory(root);
+        }
+        count += self.load_alpackages(&roots);
+        count
+    }
+
+    /// Load `.al` files from `.app` archives (ZIP) in `.alpackages/` directories.
+    fn load_alpackages(&self, roots: &[PathBuf]) -> usize {
+        let mut count = 0;
+        for root in roots {
+            let packages_dir = root.join(".alpackages");
+            if !packages_dir.is_dir() {
+                continue;
+            }
+            tracing::info!("scanning .alpackages in {}", root.display());
+            let entries = match std::fs::read_dir(&packages_dir) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!("failed to read .alpackages: {}", e);
+                    continue;
+                }
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("app"))
+                    != Some(true)
+                {
+                    continue;
+                }
+                count += self.load_app_file(&path);
+            }
+        }
+        if count > 0 {
+            tracing::info!("loaded {} files from .alpackages", count);
+        }
+        count
+    }
+
+    /// Load `.al` files from a single `.app` archive (ZIP format).
+    fn load_app_file(&self, path: &Path) -> usize {
+        let file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!("failed to open {}: {}", path.display(), e);
+                return 0;
+            }
+        };
+        let mut archive = match zip::ZipArchive::new(file) {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!("failed to read ZIP {}: {}", path.display(), e);
+                return 0;
+            }
+        };
+
+        let app_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+
+        let mut count = 0;
+        for i in 0..archive.len() {
+            let mut entry = match archive.by_index(i) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let entry_name = match entry.enclosed_name() {
+                Some(n) => n.to_owned(),
+                None => continue,
+            };
+            if !entry_name
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("al"))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            let mut source = String::new();
+            if entry.read_to_string(&mut source).is_err() {
+                continue;
+            }
+
+            let uri_str = format!("alpackage://{}/{}", app_name, entry_name.display());
+            let uri = match Url::parse(&uri_str) {
+                Ok(u) => u,
+                Err(_) => continue,
+            };
+
+            if self.documents.contains_key(&uri) {
+                continue;
+            }
+
+            if let Some(doc) = DocumentState::new(&source) {
+                self.documents.insert(uri, doc);
+                count += 1;
+            }
         }
         count
     }

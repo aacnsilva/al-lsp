@@ -28,6 +28,13 @@ pub struct CallContext<'a> {
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
+/// Context about dot-member access at a position.
+#[derive(Debug)]
+pub struct DotContext {
+    pub object_name: String,
+    pub object_byte_offset: usize,
+}
+
 /// A folding range expressed as tree-sitter points.
 #[derive(Debug)]
 pub struct FoldingArea {
@@ -353,6 +360,46 @@ pub fn find_call_context<'a>(
     })
 }
 
+/// Detect whether the cursor is in a dot-member context and return the identifier
+/// immediately before the dot.
+pub fn dot_context_at_offset(
+    tree: &Tree,
+    source: &str,
+    _symbol_table: &DocumentSymbolTable,
+    byte_offset: usize,
+) -> Option<DotContext> {
+    let offset = byte_offset.min(source.len());
+
+    // Tree-based lookup first for stable AST cases.
+    for probe in [offset, offset.saturating_sub(1)] {
+        if let Some(node) = node_at_offset(tree, probe) {
+            let mut current = Some(node);
+            while let Some(n) = current {
+                if n.kind() == "member_access" || n.kind() == "method_call" {
+                    if let Some(object_node) = n.child_by_field_name("object") {
+                        if matches!(object_node.kind(), "identifier" | "quoted_identifier") {
+                            return Some(DotContext {
+                                object_name: extract_name(object_node, source),
+                                object_byte_offset: object_node.start_byte(),
+                            });
+                        }
+                    }
+                    break;
+                }
+                current = n.parent();
+            }
+        }
+    }
+
+    // Fallback for partially typed/incomplete member access (e.g. `Cust.`).
+    parse_identifier_before_dot(source, offset).map(|(object_name, object_byte_offset)| {
+        DotContext {
+            object_name,
+            object_byte_offset,
+        }
+    })
+}
+
 /// Find the deepest node (named or unnamed) at a byte offset.
 fn find_deepest_node(node: Node, byte_offset: usize) -> Option<Node> {
     if byte_offset < node.start_byte() || byte_offset > node.end_byte() {
@@ -371,39 +418,42 @@ fn find_deepest_node(node: Node, byte_offset: usize) -> Option<Node> {
     Some(node)
 }
 
-/// Extract the object name from a type string like `Record "Customer"` → `"Customer"`.
-pub fn extract_type_object_name(type_info: &str) -> Option<&str> {
+/// Extract the object kind and object name from a type string.
+/// Example: `Record "Customer"` -> `("table", "Customer")`.
+pub fn extract_type_object_name(type_info: &str) -> Option<(&'static str, &str)> {
     let type_info = type_info.trim();
+    let split_idx = type_info.find(char::is_whitespace)?;
+    let kind = &type_info[..split_idx];
+    let mut name = type_info[split_idx..].trim();
+    if name.is_empty() {
+        return None;
+    }
 
-    // Handle: Record "Customer", Record Customer, etc.
-    // Common AL type patterns: Record X, Codeunit X, Page X, ...
-    let prefixes = [
-        "Record",
-        "Codeunit",
-        "Page",
-        "Report",
-        "Query",
-        "Xmlport",
-        "Enum",
-        "Interface",
-    ];
+    let object_kind = match kind.to_ascii_lowercase().as_str() {
+        "record" => "table",
+        "codeunit" => "codeunit",
+        "page" => "page",
+        "report" => "report",
+        "query" => "query",
+        "xmlport" => "xmlport",
+        "enum" => "enum",
+        "interface" => "interface",
+        _ => return None,
+    };
 
-    for prefix in &prefixes {
-        if let Some(rest) = type_info.strip_prefix(prefix) {
-            let rest = rest.trim();
-            if rest.is_empty() {
-                return None;
-            }
-            // Strip quotes if present
-            let name = rest.trim_matches('"');
-            if name.is_empty() {
-                return None;
-            }
-            return Some(name);
+    // Record can carry `temporary` suffix.
+    if object_kind == "table" {
+        if let Some(without_temporary) = strip_ascii_case_suffix(name, "temporary") {
+            name = without_temporary.trim_end();
         }
     }
 
-    None
+    let name = name.trim_matches('"').trim();
+    if name.is_empty() {
+        return None;
+    }
+
+    Some((object_kind, name))
 }
 
 /// Collect folding ranges from structural nodes in the parse tree.
@@ -744,7 +794,15 @@ fn is_inside_object(node: Node, source: &str, object_name_lower: &str) -> bool {
     let mut current = Some(node);
     while let Some(n) = current {
         let kind = n.kind();
-        if kind.ends_with("_declaration") && kind != "procedure_declaration" && kind != "variable_declaration" && kind != "trigger_declaration" && kind != "parameter" && kind != "field_declaration" && kind != "key_declaration" && kind != "enum_value_declaration" {
+        if kind.ends_with("_declaration")
+            && kind != "procedure_declaration"
+            && kind != "variable_declaration"
+            && kind != "trigger_declaration"
+            && kind != "parameter"
+            && kind != "field_declaration"
+            && kind != "key_declaration"
+            && kind != "enum_value_declaration"
+        {
             // This is an object declaration — check its name
             if let Some(name_node) = n.child_by_field_name("name") {
                 let name = extract_name(name_node, source);
@@ -781,6 +839,90 @@ fn is_interface_type(type_info: &str, iface_name_lower: &str) -> bool {
         return name == iface_name_lower;
     }
     false
+}
+
+fn strip_ascii_case_suffix<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
+    if value.len() < suffix.len() {
+        return None;
+    }
+    let split = value.len() - suffix.len();
+    let (head, tail) = value.split_at(split);
+    if tail.eq_ignore_ascii_case(suffix) {
+        Some(head)
+    } else {
+        None
+    }
+}
+
+fn is_ident_char(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn parse_identifier_before_dot(source: &str, offset: usize) -> Option<(String, usize)> {
+    let bytes = source.as_bytes();
+    if bytes.is_empty() || offset == 0 {
+        return None;
+    }
+
+    let mut cursor = offset.min(bytes.len());
+    while cursor > 0 && bytes[cursor - 1].is_ascii_whitespace() {
+        cursor -= 1;
+    }
+    if cursor == 0 {
+        return None;
+    }
+
+    let dot_idx = if bytes[cursor - 1] == b'.' {
+        cursor - 1
+    } else {
+        let mut ident_start = cursor;
+        while ident_start > 0 && is_ident_char(bytes[ident_start - 1]) {
+            ident_start -= 1;
+        }
+        let mut before_ident = ident_start;
+        while before_ident > 0 && bytes[before_ident - 1].is_ascii_whitespace() {
+            before_ident -= 1;
+        }
+        if before_ident == 0 || bytes[before_ident - 1] != b'.' {
+            return None;
+        }
+        before_ident - 1
+    };
+
+    let mut end = dot_idx;
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    if end == 0 {
+        return None;
+    }
+
+    // Quoted identifier before dot.
+    if bytes[end - 1] == b'"' {
+        let mut start_quote = end - 1;
+        while start_quote > 0 {
+            start_quote -= 1;
+            if bytes[start_quote] == b'"' {
+                let name = &source[start_quote + 1..end - 1];
+                if !name.is_empty() {
+                    return Some((name.to_string(), start_quote + 1));
+                }
+                return None;
+            }
+        }
+        return None;
+    }
+
+    // Regular identifier before dot.
+    let mut start = end;
+    while start > 0 && is_ident_char(bytes[start - 1]) {
+        start -= 1;
+    }
+    if start == end {
+        return None;
+    }
+
+    Some((source[start..end].to_string(), start))
 }
 
 #[cfg(test)]
@@ -948,18 +1090,44 @@ mod tests {
     fn test_extract_type_object_name() {
         assert_eq!(
             extract_type_object_name("Record \"Customer\""),
-            Some("Customer")
+            Some(("table", "Customer"))
         );
         assert_eq!(
             extract_type_object_name("Record Customer"),
-            Some("Customer")
+            Some(("table", "Customer"))
         );
         assert_eq!(
             extract_type_object_name("Codeunit \"Sales Mgt.\""),
-            Some("Sales Mgt.")
+            Some(("codeunit", "Sales Mgt."))
+        );
+        assert_eq!(
+            extract_type_object_name("Record Customer temporary"),
+            Some(("table", "Customer"))
         );
         assert_eq!(extract_type_object_name("Integer"), None);
         assert_eq!(extract_type_object_name("Text[100]"), None);
+    }
+
+    #[test]
+    fn test_dot_context_at_offset_after_dot() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        let dot_offset = source.find("Cust.").unwrap() + "Cust.".len();
+        let ctx = dot_context_at_offset(&tree, source, &table, dot_offset);
+        assert!(ctx.is_some(), "expected dot context");
+        let ctx = ctx.unwrap();
+        assert_eq!(ctx.object_name, "Cust");
     }
 
     #[test]

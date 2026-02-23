@@ -40,57 +40,17 @@
     "fields": {
       "left": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
             "named": true
           }
         ]
       },
       "operator": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "+",
@@ -104,54 +64,24 @@
       },
       "right": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
             "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
             "named": true
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "multiplicative_expression",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -160,104 +90,34 @@
     "fields": {
       "left": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
             "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
             "named": true
           }
         ]
       },
       "right": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
             "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
             "named": true
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "comparison_expression",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -315,47 +175,7 @@
       "required": true,
       "types": [
         {
-          "type": "additive_expression",
-          "named": true
-        },
-        {
-          "type": "and_expression",
-          "named": true
-        },
-        {
-          "type": "array_access",
-          "named": true
-        },
-        {
-          "type": "comparison_expression",
-          "named": true
-        },
-        {
-          "type": "member_access",
-          "named": true
-        },
-        {
-          "type": "method_call",
-          "named": true
-        },
-        {
-          "type": "multiplicative_expression",
-          "named": true
-        },
-        {
-          "type": "negation_expression",
-          "named": true
-        },
-        {
-          "type": "not_expression",
-          "named": true
-        },
-        {
-          "type": "or_expression",
-          "named": true
-        },
-        {
-          "type": "primary_expression",
+          "type": "conditional_expression",
           "named": true
         }
       ]
@@ -393,47 +213,7 @@
       "required": true,
       "types": [
         {
-          "type": "additive_expression",
-          "named": true
-        },
-        {
-          "type": "and_expression",
-          "named": true
-        },
-        {
-          "type": "array_access",
-          "named": true
-        },
-        {
-          "type": "comparison_expression",
-          "named": true
-        },
-        {
-          "type": "member_access",
-          "named": true
-        },
-        {
-          "type": "method_call",
-          "named": true
-        },
-        {
-          "type": "multiplicative_expression",
-          "named": true
-        },
-        {
-          "type": "negation_expression",
-          "named": true
-        },
-        {
-          "type": "not_expression",
-          "named": true
-        },
-        {
-          "type": "or_expression",
-          "named": true
-        },
-        {
-          "type": "primary_expression",
+          "type": "conditional_expression",
           "named": true
         }
       ]
@@ -523,47 +303,7 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
@@ -573,51 +313,53 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
       }
+    }
+  },
+  {
+    "type": "attribute",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "attribute_arguments",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "attribute_arguments",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -676,6 +418,40 @@
     }
   },
   {
+    "type": "calc_formula_expression",
+    "named": true,
+    "fields": {
+      "source": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "member_access",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      },
+      "where": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "where_clause",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "case_branch",
     "named": true,
     "fields": {},
@@ -683,18 +459,6 @@
       "multiple": true,
       "required": true,
       "types": [
-        {
-          "type": "additive_expression",
-          "named": true
-        },
-        {
-          "type": "and_expression",
-          "named": true
-        },
-        {
-          "type": "array_access",
-          "named": true
-        },
         {
           "type": "assignment_statement",
           "named": true
@@ -708,11 +472,11 @@
           "named": true
         },
         {
-          "type": "comparison_expression",
+          "type": "compound_assignment_statement",
           "named": true
         },
         {
-          "type": "compound_assignment_statement",
+          "type": "conditional_expression",
           "named": true
         },
         {
@@ -729,34 +493,6 @@
         },
         {
           "type": "if_statement",
-          "named": true
-        },
-        {
-          "type": "member_access",
-          "named": true
-        },
-        {
-          "type": "method_call",
-          "named": true
-        },
-        {
-          "type": "multiplicative_expression",
-          "named": true
-        },
-        {
-          "type": "negation_expression",
-          "named": true
-        },
-        {
-          "type": "not_expression",
-          "named": true
-        },
-        {
-          "type": "or_expression",
-          "named": true
-        },
-        {
-          "type": "primary_expression",
           "named": true
         },
         {
@@ -783,47 +519,7 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
@@ -1001,57 +697,17 @@
     "fields": {
       "left": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
             "named": true
           }
         ]
       },
       "operator": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "<",
@@ -1081,54 +737,24 @@
       },
       "right": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "additive_expression",
             "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
-            "named": true
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "additive_expression",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -1162,47 +788,7 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
@@ -1212,47 +798,79 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
+            "type": "conditional_expression",
             "named": true
-          },
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "conditional_expression",
+    "named": true,
+    "fields": {
+      "alternative": {
+        "multiple": false,
+        "required": false,
+        "types": [
           {
-            "type": "and_expression",
+            "type": "conditional_expression",
             "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
+          }
+        ]
+      },
+      "condition": {
+        "multiple": false,
+        "required": true,
+        "types": [
           {
             "type": "or_expression",
             "named": true
+          }
+        ]
+      },
+      "consequence": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "conditional_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "const_reference",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "boolean_literal",
+            "named": true
           },
           {
-            "type": "primary_expression",
+            "type": "decimal_literal",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          },
+          {
+            "type": "string_literal",
             "named": true
           }
         ]
@@ -1455,6 +1073,26 @@
     }
   },
   {
+    "type": "enum_qualified_name",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "enum_type",
     "named": true,
     "fields": {
@@ -1523,47 +1161,7 @@
       "required": false,
       "types": [
         {
-          "type": "additive_expression",
-          "named": true
-        },
-        {
-          "type": "and_expression",
-          "named": true
-        },
-        {
-          "type": "array_access",
-          "named": true
-        },
-        {
-          "type": "comparison_expression",
-          "named": true
-        },
-        {
-          "type": "member_access",
-          "named": true
-        },
-        {
-          "type": "method_call",
-          "named": true
-        },
-        {
-          "type": "multiplicative_expression",
-          "named": true
-        },
-        {
-          "type": "negation_expression",
-          "named": true
-        },
-        {
-          "type": "not_expression",
-          "named": true
-        },
-        {
-          "type": "or_expression",
-          "named": true
-        },
-        {
-          "type": "primary_expression",
+          "type": "conditional_expression",
           "named": true
         }
       ]
@@ -1578,47 +1176,7 @@
       "required": true,
       "types": [
         {
-          "type": "additive_expression",
-          "named": true
-        },
-        {
-          "type": "and_expression",
-          "named": true
-        },
-        {
-          "type": "array_access",
-          "named": true
-        },
-        {
-          "type": "comparison_expression",
-          "named": true
-        },
-        {
-          "type": "member_access",
-          "named": true
-        },
-        {
-          "type": "method_call",
-          "named": true
-        },
-        {
-          "type": "multiplicative_expression",
-          "named": true
-        },
-        {
-          "type": "negation_expression",
-          "named": true
-        },
-        {
-          "type": "not_expression",
-          "named": true
-        },
-        {
-          "type": "or_expression",
-          "named": true
-        },
-        {
-          "type": "primary_expression",
+          "type": "conditional_expression",
           "named": true
         }
       ]
@@ -1735,6 +1293,26 @@
     }
   },
   {
+    "type": "field_reference",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "fieldgroup_declaration",
     "named": true,
     "fields": {
@@ -1799,6 +1377,22 @@
     }
   },
   {
+    "type": "filter_reference",
+    "named": true,
+    "fields": {
+      "pattern": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "filter_pattern",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "for_statement",
     "named": true,
     "fields": {
@@ -1857,47 +1451,7 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
@@ -1907,47 +1461,7 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
@@ -1957,47 +1471,7 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
@@ -2147,54 +1621,14 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
       },
       "consequence": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "assignment_statement",
@@ -2280,10 +1714,6 @@
           "named": true
         },
         {
-          "type": "procedure_declaration",
-          "named": true
-        },
-        {
           "type": "property",
           "named": true
         },
@@ -2332,6 +1762,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -2408,13 +1848,52 @@
     }
   },
   {
+    "type": "label_option",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "boolean_literal",
+          "named": true
+        },
+        {
+          "type": "decimal_literal",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "quoted_identifier",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "label_type",
     "named": true,
     "fields": {},
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": true,
       "types": [
+        {
+          "type": "label_option",
+          "named": true
+        },
         {
           "type": "string_literal",
           "named": true
@@ -2452,6 +1931,21 @@
         },
         {
           "type": "repeater_section",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "list_literal",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "conditional_expression",
           "named": true
         }
       ]
@@ -2628,57 +2122,17 @@
     "fields": {
       "left": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
             "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
             "named": true
           }
         ]
       },
       "operator": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "*",
@@ -2692,22 +2146,10 @@
       },
       "right": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
             "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
             "named": true
           },
           {
@@ -2719,10 +2161,6 @@
             "named": true
           },
           {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
             "type": "negation_expression",
             "named": true
           },
@@ -2731,15 +2169,41 @@
             "named": true
           },
           {
-            "type": "or_expression",
-            "named": true
-          },
-          {
             "type": "primary_expression",
             "named": true
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "array_access",
+          "named": true
+        },
+        {
+          "type": "member_access",
+          "named": true
+        },
+        {
+          "type": "method_call",
+          "named": true
+        },
+        {
+          "type": "negation_expression",
+          "named": true
+        },
+        {
+          "type": "not_expression",
+          "named": true
+        },
+        {
+          "type": "primary_expression",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -2763,6 +2227,14 @@
           "named": true
         },
         {
+          "type": "negation_expression",
+          "named": true
+        },
+        {
+          "type": "not_expression",
+          "named": true
+        },
+        {
           "type": "primary_expression",
           "named": true
         }
@@ -2778,19 +2250,7 @@
       "required": true,
       "types": [
         {
-          "type": "additive_expression",
-          "named": true
-        },
-        {
-          "type": "and_expression",
-          "named": true
-        },
-        {
           "type": "array_access",
-          "named": true
-        },
-        {
-          "type": "comparison_expression",
           "named": true
         },
         {
@@ -2802,19 +2262,11 @@
           "named": true
         },
         {
-          "type": "multiplicative_expression",
-          "named": true
-        },
-        {
           "type": "negation_expression",
           "named": true
         },
         {
           "type": "not_expression",
-          "named": true
-        },
-        {
-          "type": "or_expression",
           "named": true
         },
         {
@@ -2830,7 +2282,7 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": true,
+      "required": false,
       "types": [
         {
           "type": "identifier",
@@ -2849,104 +2301,34 @@
     "fields": {
       "left": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
             "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
             "named": true
           }
         ]
       },
       "right": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
             "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
             "named": true
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -3166,47 +2548,7 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
@@ -3371,47 +2713,7 @@
       "required": true,
       "types": [
         {
-          "type": "additive_expression",
-          "named": true
-        },
-        {
-          "type": "and_expression",
-          "named": true
-        },
-        {
-          "type": "array_access",
-          "named": true
-        },
-        {
-          "type": "comparison_expression",
-          "named": true
-        },
-        {
-          "type": "member_access",
-          "named": true
-        },
-        {
-          "type": "method_call",
-          "named": true
-        },
-        {
-          "type": "multiplicative_expression",
-          "named": true
-        },
-        {
-          "type": "negation_expression",
-          "named": true
-        },
-        {
-          "type": "not_expression",
-          "named": true
-        },
-        {
-          "type": "or_expression",
-          "named": true
-        },
-        {
-          "type": "primary_expression",
+          "type": "conditional_expression",
           "named": true
         }
       ]
@@ -3441,47 +2743,7 @@
       "required": true,
       "types": [
         {
-          "type": "additive_expression",
-          "named": true
-        },
-        {
-          "type": "and_expression",
-          "named": true
-        },
-        {
-          "type": "array_access",
-          "named": true
-        },
-        {
-          "type": "comparison_expression",
-          "named": true
-        },
-        {
-          "type": "member_access",
-          "named": true
-        },
-        {
-          "type": "method_call",
-          "named": true
-        },
-        {
-          "type": "multiplicative_expression",
-          "named": true
-        },
-        {
-          "type": "negation_expression",
-          "named": true
-        },
-        {
-          "type": "not_expression",
-          "named": true
-        },
-        {
-          "type": "or_expression",
-          "named": true
-        },
-        {
-          "type": "primary_expression",
+          "type": "conditional_expression",
           "named": true
         },
         {
@@ -3611,11 +2873,19 @@
           "named": true
         },
         {
+          "type": "list_literal",
+          "named": true
+        },
+        {
           "type": "parenthesized_expression",
           "named": true
         },
         {
           "type": "qualified_enum_value",
+          "named": true
+        },
+        {
+          "type": "qualified_object_reference",
           "named": true
         },
         {
@@ -3687,6 +2957,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -3724,6 +3004,10 @@
             "named": true
           },
           {
+            "type": "calc_formula_expression",
+            "named": true
+          },
+          {
             "type": "decimal_literal",
             "named": true
           },
@@ -3736,11 +3020,19 @@
             "named": true
           },
           {
+            "type": "property_option_value",
+            "named": true
+          },
+          {
             "type": "quoted_identifier",
             "named": true
           },
           {
             "type": "string_literal",
+            "named": true
+          },
+          {
+            "type": "table_relation_expression",
             "named": true
           }
         ]
@@ -3748,7 +3040,7 @@
     }
   },
   {
-    "type": "qualified_enum_value",
+    "type": "property_option_assignment",
     "named": true,
     "fields": {},
     "children": {
@@ -3756,14 +3048,111 @@
       "required": true,
       "types": [
         {
+          "type": "boolean_literal",
+          "named": true
+        },
+        {
+          "type": "decimal_literal",
+          "named": true
+        },
+        {
           "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "integer_literal",
           "named": true
         },
         {
           "type": "quoted_identifier",
           "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "property_option_value",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "property_option_assignment",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "qualified_enum_value",
+    "named": true,
+    "fields": {
+      "enum": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "enum_qualified_name",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "member_access",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "qualified_object_reference",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -3902,47 +3291,7 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
@@ -4163,72 +3512,87 @@
   {
     "type": "return_type",
     "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "array_type",
-          "named": true
-        },
-        {
-          "type": "codeunit_type",
-          "named": true
-        },
-        {
-          "type": "dotnet_type",
-          "named": true
-        },
-        {
-          "type": "enum_type",
-          "named": true
-        },
-        {
-          "type": "interface_type",
-          "named": true
-        },
-        {
-          "type": "label_type",
-          "named": true
-        },
-        {
-          "type": "list_type",
-          "named": true
-        },
-        {
-          "type": "option_type",
-          "named": true
-        },
-        {
-          "type": "page_type",
-          "named": true
-        },
-        {
-          "type": "query_type",
-          "named": true
-        },
-        {
-          "type": "record_type",
-          "named": true
-        },
-        {
-          "type": "report_type",
-          "named": true
-        },
-        {
-          "type": "simple_type",
-          "named": true
-        },
-        {
-          "type": "sized_type",
-          "named": true
-        },
-        {
-          "type": "xmlport_type",
-          "named": true
-        }
-      ]
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "array_type",
+            "named": true
+          },
+          {
+            "type": "codeunit_type",
+            "named": true
+          },
+          {
+            "type": "dotnet_type",
+            "named": true
+          },
+          {
+            "type": "enum_type",
+            "named": true
+          },
+          {
+            "type": "interface_type",
+            "named": true
+          },
+          {
+            "type": "label_type",
+            "named": true
+          },
+          {
+            "type": "list_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
+            "type": "page_type",
+            "named": true
+          },
+          {
+            "type": "query_type",
+            "named": true
+          },
+          {
+            "type": "record_type",
+            "named": true
+          },
+          {
+            "type": "report_type",
+            "named": true
+          },
+          {
+            "type": "simple_type",
+            "named": true
+          },
+          {
+            "type": "sized_type",
+            "named": true
+          },
+          {
+            "type": "xmlport_type",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -4443,6 +3807,40 @@
     }
   },
   {
+    "type": "table_relation_expression",
+    "named": true,
+    "fields": {
+      "relation": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "member_access",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      },
+      "where": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "where_clause",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "trigger_declaration",
     "named": true,
     "fields": {
@@ -4490,6 +3888,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -4591,6 +3999,84 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "where_clause",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "where_condition",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "where_condition",
+    "named": true,
+    "fields": {
+      "field": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "where_value_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "where_value_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "const_reference",
+          "named": true
+        },
+        {
+          "type": "field_reference",
+          "named": true
+        },
+        {
+          "type": "filter_reference",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -4652,47 +4138,7 @@
         "required": true,
         "types": [
           {
-            "type": "additive_expression",
-            "named": true
-          },
-          {
-            "type": "and_expression",
-            "named": true
-          },
-          {
-            "type": "array_access",
-            "named": true
-          },
-          {
-            "type": "comparison_expression",
-            "named": true
-          },
-          {
-            "type": "member_access",
-            "named": true
-          },
-          {
-            "type": "method_call",
-            "named": true
-          },
-          {
-            "type": "multiplicative_expression",
-            "named": true
-          },
-          {
-            "type": "negation_expression",
-            "named": true
-          },
-          {
-            "type": "not_expression",
-            "named": true
-          },
-          {
-            "type": "or_expression",
-            "named": true
-          },
-          {
-            "type": "primary_expression",
+            "type": "conditional_expression",
             "named": true
           }
         ]
@@ -4708,18 +4154,6 @@
       "required": true,
       "types": [
         {
-          "type": "additive_expression",
-          "named": true
-        },
-        {
-          "type": "and_expression",
-          "named": true
-        },
-        {
-          "type": "array_access",
-          "named": true
-        },
-        {
           "type": "assignment_statement",
           "named": true
         },
@@ -4732,11 +4166,11 @@
           "named": true
         },
         {
-          "type": "comparison_expression",
+          "type": "compound_assignment_statement",
           "named": true
         },
         {
-          "type": "compound_assignment_statement",
+          "type": "conditional_expression",
           "named": true
         },
         {
@@ -4753,34 +4187,6 @@
         },
         {
           "type": "if_statement",
-          "named": true
-        },
-        {
-          "type": "member_access",
-          "named": true
-        },
-        {
-          "type": "method_call",
-          "named": true
-        },
-        {
-          "type": "multiplicative_expression",
-          "named": true
-        },
-        {
-          "type": "negation_expression",
-          "named": true
-        },
-        {
-          "type": "not_expression",
-          "named": true
-        },
-        {
-          "type": "or_expression",
-          "named": true
-        },
-        {
-          "type": "primary_expression",
           "named": true
         },
         {
@@ -4994,6 +4400,10 @@
     "named": false
   },
   {
+    "type": "?",
+    "named": false
+  },
+  {
     "type": "[",
     "named": false
   },
@@ -5014,6 +4424,10 @@
     "named": true
   },
   {
+    "type": "filter_pattern",
+    "named": true
+  },
+  {
     "type": "identifier",
     "named": true
   },
@@ -5026,7 +4440,15 @@
     "named": true
   },
   {
+    "type": "pragma_directive",
+    "named": true
+  },
+  {
     "type": "quoted_identifier",
+    "named": true
+  },
+  {
+    "type": "region_directive",
     "named": true
   },
   {

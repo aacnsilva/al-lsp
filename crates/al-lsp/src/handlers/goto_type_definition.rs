@@ -1,5 +1,6 @@
-use lsp_types::{GotoDefinitionResponse, Location, request::GotoTypeDefinitionParams};
+use lsp_types::{request::GotoTypeDefinitionParams, GotoDefinitionResponse, Location};
 
+use al_syntax::ast::AlSymbolKind;
 use al_syntax::navigation::{extract_type_object_name, identifier_context_at_offset};
 
 use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
@@ -20,15 +21,21 @@ pub fn handle_goto_type_definition(
     let sym = ctx.symbol?;
 
     let type_info = sym.type_info.as_deref()?;
-    let object_name = extract_type_object_name(type_info)?;
+    let (object_kind, object_name) = extract_type_object_name(type_info)?;
 
     // Search in same document first
-    if let Some(obj) = doc.symbol_table.find_object_by_name(object_name) {
-        let range = ts_range_to_lsp_range(obj.start_point, obj.end_point);
-        return Some(GotoDefinitionResponse::Scalar(Location {
-            uri: uri.clone(),
-            range,
-        }));
+    for obj in &doc.symbol_table.symbols {
+        if let AlSymbolKind::Object(kind) = obj.kind {
+            if kind.label().eq_ignore_ascii_case(object_kind)
+                && obj.name.eq_ignore_ascii_case(object_name)
+            {
+                let range = ts_range_to_lsp_range(obj.start_point, obj.end_point);
+                return Some(GotoDefinitionResponse::Scalar(Location {
+                    uri: uri.clone(),
+                    range,
+                }));
+            }
+        }
     }
 
     // Search in other open documents
@@ -36,12 +43,18 @@ pub fn handle_goto_type_definition(
         if *entry.key() == uri {
             continue;
         }
-        if let Some(obj) = entry.value().symbol_table.find_object_by_name(object_name) {
-            let range = ts_range_to_lsp_range(obj.start_point, obj.end_point);
-            return Some(GotoDefinitionResponse::Scalar(Location {
-                uri: entry.key().clone(),
-                range,
-            }));
+        for obj in &entry.value().symbol_table.symbols {
+            if let AlSymbolKind::Object(kind) = obj.kind {
+                if kind.label().eq_ignore_ascii_case(object_kind)
+                    && obj.name.eq_ignore_ascii_case(object_name)
+                {
+                    let range = ts_range_to_lsp_range(obj.start_point, obj.end_point);
+                    return Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: entry.key().clone(),
+                        range,
+                    }));
+                }
+            }
         }
     }
 

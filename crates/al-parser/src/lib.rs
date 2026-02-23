@@ -211,6 +211,56 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
     }
 
     #[test]
+    fn test_parse_incomplete_qualified_enum_value_has_error() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        X: Integer;
+    begin
+        X := MyEnum::;
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(
+            root.has_error(),
+            "tree should flag incomplete qualified enum value as invalid: {}",
+            root.to_sexp()
+        );
+    }
+
+    #[test]
+    fn test_parse_incomplete_qualified_enum_value_on_member_access_has_error() {
+        let source = r#"table 50100 Customer
+{
+    fields
+    {
+        field(1; Status; Enum MyEnum)
+        {
+        }
+    }
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Rec: Record Customer;
+    begin
+        Rec.Status::;
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(
+            root.has_error(),
+            "tree should flag incomplete member-access enum qualification as invalid: {}",
+            root.to_sexp()
+        );
+    }
+
+    #[test]
     fn test_parse_multi_name_variable() {
         let source = r#"codeunit 50100 Test
 {
@@ -218,6 +268,67 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
     var
         LineRec, NewLine: Record "LSC POS Trans. Line";
     begin
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_procedure_and_trigger_attributes() {
+        let source = r#"codeunit 50100 Test
+{
+    [Test]
+    [HandlerFunctions('MyHandler')]
+    procedure DoWork()
+    begin
+    end;
+
+    [Test]
+    trigger OnRun()
+    begin
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_label_with_locked_option() {
+        let source = r#"codeunit 50100 Test
+{
+    var
+        EBTText: Label 'EBT', Locked = true;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_region_directives() {
+        let source = r#"codeunit 50100 Test
+{
+    #region Transaction GUI
+    procedure DoWork()
+    begin
+    end;
+    #endregion
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_if_then_empty_statement() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        if true then;
     end;
 }"#;
         let tree = parse(source).expect("parse failed");

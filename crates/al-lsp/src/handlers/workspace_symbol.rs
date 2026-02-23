@@ -37,6 +37,13 @@ fn collect_symbols_flat(
     query: &str,
     result: &mut Vec<SymbolInformation>,
 ) {
+    if sym.name.trim().is_empty() {
+        for child in &sym.children {
+            collect_symbols_flat(child, uri, query, result);
+        }
+        return;
+    }
+
     if query.is_empty() || sym.name.to_lowercase().contains(query) {
         let range = ts_range_to_lsp_range(sym.start_point, sym.end_point);
         result.push(SymbolInformation {

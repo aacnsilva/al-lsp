@@ -67,6 +67,7 @@ impl LanguageServer for AlBackend {
                     TextDocumentSyncKind::FULL,
                 )),
                 definition_provider: Some(OneOf::Left(true)),
+                declaration_provider: Some(DeclarationCapability::Simple(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
@@ -78,7 +79,7 @@ impl LanguageServer for AlBackend {
                     },
                 })),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![".".to_string()]),
+                    trigger_characters: Some(vec![".".to_string(), ":".to_string(), "=".to_string()]),
                     ..Default::default()
                 }),
                 signature_help_provider: Some(SignatureHelpOptions {
@@ -203,6 +204,13 @@ impl LanguageServer for AlBackend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
+        Ok(goto_definition::handle_goto_definition(&self.state, params))
+    }
+
+    async fn goto_declaration(
+        &self,
+        params: request::GotoDeclarationParams,
+    ) -> Result<Option<request::GotoDeclarationResponse>> {
         Ok(goto_definition::handle_goto_definition(&self.state, params))
     }
 

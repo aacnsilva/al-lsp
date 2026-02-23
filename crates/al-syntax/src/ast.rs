@@ -242,18 +242,52 @@ fn extract_procedure_symbol(node: Node, source: &str) -> Option<AlSymbol> {
     let name_node = node.child_by_field_name("name")?;
     let name = extract_name(name_node, source);
 
-    let type_info = node.child_by_field_name("return_type").map(|rt| {
-        node_text(rt, source)
-            .trim_start_matches(':')
-            .trim()
-            .to_string()
-    });
+    let mut type_info = None;
+    let mut return_symbol: Option<AlSymbol> = None;
+    if let Some(rt) = node.child_by_field_name("return_type") {
+        let rt_type = rt
+            .child_by_field_name("type")
+            .map(|t| extract_type_info(t, source))
+            .or_else(|| {
+                // Backward-compatible fallback for older parse trees.
+                let text = node_text(rt, source).trim_start_matches(':').trim();
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text.to_string())
+                }
+            });
+        type_info = rt_type.clone();
+
+        // Named return value acts as a local variable in AL procedures.
+        if let Some(rt_name_node) = rt.child_by_field_name("name") {
+            if node.kind() != "interface_method" {
+                return_symbol = Some(AlSymbol {
+                    name: extract_name(rt_name_node, source),
+                    kind: AlSymbolKind::Variable,
+                    type_info: rt_type,
+                    implements: Vec::new(),
+                    start_byte: rt.start_byte(),
+                    end_byte: rt.end_byte(),
+                    start_point: rt.start_position(),
+                    end_point: rt.end_position(),
+                    name_start_point: rt_name_node.start_position(),
+                    name_end_point: rt_name_node.end_position(),
+                    children: Vec::new(),
+                });
+            }
+        }
+    }
 
     let mut children = Vec::new();
 
     // Extract parameters
     if let Some(params) = node.child_by_field_name("parameters") {
         extract_parameter_symbols(params, source, &mut children);
+    }
+
+    if let Some(ret) = return_symbol {
+        children.push(ret);
     }
 
     // Extract local variables
@@ -523,6 +557,37 @@ mod tests {
         assert_eq!(table.children[1].name, "Name");
         assert_eq!(table.children[2].name, "PK");
         assert!(matches!(table.children[2].kind, AlSymbolKind::Key));
+    }
+
+    #[test]
+    fn test_extract_named_return_value_as_local_variable() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure GetFunctionModeEnum() FunctionModeEnum: Enum "LSC POS Command";
+    begin
+        exit(FunctionSetup.CommandToEnum(GetFunctionMode));
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+
+        assert_eq!(symbols.len(), 1);
+        let obj = &symbols[0];
+        assert_eq!(obj.name, "Test");
+
+        let proc = obj
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Procedure) && c.name == "GetFunctionModeEnum")
+            .expect("procedure symbol");
+
+        assert_eq!(proc.type_info.as_deref(), Some("Enum \"LSC POS Command\""));
+        assert!(
+            proc.children
+                .iter()
+                .any(|c| matches!(c.kind, AlSymbolKind::Variable) && c.name == "FunctionModeEnum"),
+            "expected named return value to be extracted as local variable"
+        );
     }
 
     #[test]
