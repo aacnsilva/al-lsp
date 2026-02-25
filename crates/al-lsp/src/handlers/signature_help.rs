@@ -1,6 +1,5 @@
 use lsp_types::{
-    ParameterInformation, ParameterLabel, SignatureHelp, SignatureHelpParams,
-    SignatureInformation,
+    ParameterInformation, ParameterLabel, SignatureHelp, SignatureHelpParams, SignatureInformation,
 };
 
 use al_syntax::ast::AlSymbolKind;

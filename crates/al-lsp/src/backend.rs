@@ -79,7 +79,11 @@ impl LanguageServer for AlBackend {
                     },
                 })),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![".".to_string(), ":".to_string(), "=".to_string()]),
+                    trigger_characters: Some(vec![
+                        ".".to_string(),
+                        ":".to_string(),
+                        "=".to_string(),
+                    ]),
                     ..Default::default()
                 }),
                 signature_help_provider: Some(SignatureHelpOptions {
@@ -132,7 +136,10 @@ impl LanguageServer for AlBackend {
 
         let count = self.state.load_workspace_files();
         let total = self.state.documents.len();
-        let msg = format!("al-lsp: loaded {} .al files from workspace ({} total)", count, total);
+        let msg = format!(
+            "al-lsp: loaded {} .al files from workspace ({} total)",
+            count, total
+        );
         tracing::info!("{}", msg);
         self.client.log_message(MessageType::INFO, &msg).await;
         self.client.show_message(MessageType::INFO, &msg).await;
@@ -195,7 +202,10 @@ impl LanguageServer for AlBackend {
 
         // Rescan to pick up new files
         let count = self.state.load_workspace_files();
-        let msg = format!("al-lsp: workspace folders changed, loaded {} new .al files", count);
+        let msg = format!(
+            "al-lsp: workspace folders changed, loaded {} new .al files",
+            count
+        );
         tracing::info!("{}", msg);
         self.client.log_message(MessageType::INFO, &msg).await;
     }
@@ -233,7 +243,10 @@ impl LanguageServer for AlBackend {
         &self,
         params: DocumentHighlightParams,
     ) -> Result<Option<Vec<DocumentHighlight>>> {
-        Ok(document_highlight::handle_document_highlight(&self.state, params))
+        Ok(document_highlight::handle_document_highlight(
+            &self.state,
+            params,
+        ))
     }
 
     async fn prepare_rename(
@@ -259,28 +272,34 @@ impl LanguageServer for AlBackend {
         &self,
         params: request::GotoTypeDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        Ok(goto_type_definition::handle_goto_type_definition(&self.state, params))
+        Ok(goto_type_definition::handle_goto_type_definition(
+            &self.state,
+            params,
+        ))
     }
 
     async fn goto_implementation(
         &self,
         params: request::GotoImplementationParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        Ok(goto_implementation::handle_goto_implementation(&self.state, params))
+        Ok(goto_implementation::handle_goto_implementation(
+            &self.state,
+            params,
+        ))
     }
 
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         Ok(folding_range::handle_folding_range(&self.state, params))
     }
 
-    async fn formatting(
-        &self,
-        params: DocumentFormattingParams,
-    ) -> Result<Option<Vec<TextEdit>>> {
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         Ok(formatting::handle_formatting(&self.state, params))
     }
 
-    async fn code_action(&self, params: CodeActionParams) -> Result<Option<Vec<CodeActionOrCommand>>> {
+    async fn code_action(
+        &self,
+        params: CodeActionParams,
+    ) -> Result<Option<Vec<CodeActionOrCommand>>> {
         Ok(code_action::handle_code_action(&self.state, params))
     }
 
@@ -288,6 +307,9 @@ impl LanguageServer for AlBackend {
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
-        Ok(workspace_symbol::handle_workspace_symbol(&self.state, params))
+        Ok(workspace_symbol::handle_workspace_symbol(
+            &self.state,
+            params,
+        ))
     }
 }

@@ -24,8 +24,7 @@ pub fn handle_prepare_rename(
     let source = doc.source();
 
     // Allow prepare-rename on interface method calls
-    if interface_method_call_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)
-        .is_some()
+    if interface_method_call_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset).is_some()
     {
         let node = al_syntax::navigation::node_at_offset(&doc.tree, byte_offset)?;
         let range = ts_range_to_lsp_range(node.start_position(), node.end_position());
@@ -33,8 +32,7 @@ pub fn handle_prepare_rename(
     }
 
     // Allow prepare-rename on codeunit method calls
-    if codeunit_method_call_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)
-        .is_some()
+    if codeunit_method_call_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset).is_some()
     {
         let node = al_syntax::navigation::node_at_offset(&doc.tree, byte_offset)?;
         let range = ts_range_to_lsp_range(node.start_position(), node.end_position());
@@ -224,14 +222,18 @@ fn rename_interface_method(
             insert_edit(
                 &mut changes,
                 entry.key().clone(),
-                make_rename_edit(method_sym.name_start_point, method_sym.name_end_point, new_name),
+                make_rename_edit(
+                    method_sym.name_start_point,
+                    method_sym.name_end_point,
+                    new_name,
+                ),
             );
         }
 
         // Rename implementation procedures
-        let impl_procs =
-            doc.symbol_table
-                .find_implementation_procedures(interface_name, method_name);
+        let impl_procs = doc
+            .symbol_table
+            .find_implementation_procedures(interface_name, method_name);
         for proc_sym in impl_procs {
             insert_edit(
                 &mut changes,
@@ -288,11 +290,7 @@ fn rename_implementation_procedure(
                     insert_edit(
                         &mut changes,
                         impl_uri.clone(),
-                        make_rename_edit(
-                            child.name_start_point,
-                            child.name_end_point,
-                            new_name,
-                        ),
+                        make_rename_edit(child.name_start_point, child.name_end_point, new_name),
                     );
 
                     // Find all local references to this procedure within the same document
@@ -453,7 +451,11 @@ mod tests {
         let changes = edit.changes.unwrap();
         let edits = changes.get(&uri).unwrap();
         // Declaration + usage = at least 2
-        assert!(edits.len() >= 2, "expected at least 2 edits, got {}", edits.len());
+        assert!(
+            edits.len() >= 2,
+            "expected at least 2 edits, got {}",
+            edits.len()
+        );
         assert!(edits.iter().all(|e| e.new_text == "NewVar"));
     }
 
@@ -501,7 +503,10 @@ mod tests {
             iface_edits.is_some(),
             "expected edits in interface document"
         );
-        assert!(iface_edits.unwrap().iter().all(|e| e.new_text == "FetchAddress"));
+        assert!(iface_edits
+            .unwrap()
+            .iter()
+            .all(|e| e.new_text == "FetchAddress"));
 
         // Should have edits in the implementation document (procedure name + call site)
         let impl_edits = changes.get(&impl_uri);
@@ -509,7 +514,11 @@ mod tests {
             impl_edits.is_some(),
             "expected edits in implementation document"
         );
-        let impl_edit_texts: Vec<&str> = impl_edits.unwrap().iter().map(|e| e.new_text.as_str()).collect();
+        let impl_edit_texts: Vec<&str> = impl_edits
+            .unwrap()
+            .iter()
+            .map(|e| e.new_text.as_str())
+            .collect();
         assert!(
             impl_edit_texts.iter().all(|t| *t == "FetchAddress"),
             "all impl edits should rename to FetchAddress, got: {:?}",
@@ -597,6 +606,51 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
         // Cursor on GetAddress in `AddressProvider.GetAddress()` (line 15)
         // "        AddressProvider.GetAddress();"
         // 8 spaces + "AddressProvider." = 24, so GetAddress starts at col 24
+        let params = make_rename_params(uri.clone(), 15, 24, "FetchAddress");
+        let result = handle_rename(&state, params);
+
+        assert!(result.is_some(), "expected rename result");
+        let edit = result.unwrap();
+        let changes = edit.changes.unwrap();
+        let edits = changes.get(&uri).unwrap();
+
+        // Should rename: interface method def, impl procedure name, call site = 3 edits
+        assert!(
+            edits.len() >= 3,
+            "expected at least 3 edits (iface def + impl name + call site), got {}",
+            edits.len()
+        );
+        assert!(edits.iter().all(|e| e.new_text == "FetchAddress"));
+    }
+
+    #[test]
+    fn test_rename_from_method_call_without_parentheses() {
+        let source = r#"interface IAddressProvider
+{
+    procedure GetAddress(): Text;
+}
+
+codeunit 50200 CompanyAddressProvider implements IAddressProvider
+{
+    procedure GetAddress(): Text
+    begin
+    end;
+
+    procedure HelloWorld()
+    var
+        AddressProvider: Interface IAddressProvider;
+    begin
+        AddressProvider.GetAddress;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        // Cursor on GetAddress in `AddressProvider.GetAddress;` (line 15, col 24)
         let params = make_rename_params(uri.clone(), 15, 24, "FetchAddress");
         let result = handle_rename(&state, params);
 

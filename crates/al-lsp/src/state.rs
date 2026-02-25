@@ -4,11 +4,21 @@ use std::path::{Path, PathBuf};
 use dashmap::DashMap;
 use lsp_types::Url;
 
+use al_syntax::ast::AlSymbolKind;
 use al_syntax::document::DocumentState;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedObjectEntry {
+    pub uri: Url,
+    pub object_start_byte: usize,
+}
 
 /// Global server state holding all open documents.
 pub struct WorldState {
     pub documents: DashMap<Url, DocumentState>,
+    /// Workspace-wide object index:
+    /// `(object_kind_lower, object_name_lower) -> object locations`.
+    pub object_index: DashMap<(String, String), Vec<IndexedObjectEntry>>,
     /// Workspace root directories (resolved from InitializeParams).
     pub workspace_roots: std::sync::Mutex<Vec<PathBuf>>,
 }
@@ -17,8 +27,50 @@ impl WorldState {
     pub fn new() -> Self {
         WorldState {
             documents: DashMap::new(),
+            object_index: DashMap::new(),
             workspace_roots: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Insert or replace a document and refresh object index entries for its URI.
+    pub fn upsert_document(&self, uri: Url, doc: DocumentState) {
+        self.documents.insert(uri.clone(), doc);
+        self.reindex_document(&uri);
+    }
+
+    /// Remove a document and all object index entries pointing to it.
+    pub fn remove_document(&self, uri: &Url) {
+        self.documents.remove(uri);
+        self.remove_uri_from_object_index(uri);
+    }
+
+    /// Rebuild object index entries for a loaded document.
+    pub fn reindex_document(&self, uri: &Url) {
+        self.remove_uri_from_object_index(uri);
+        let Some(doc) = self.documents.get(uri) else {
+            return;
+        };
+
+        for object in &doc.symbol_table.symbols {
+            let AlSymbolKind::Object(kind) = object.kind else {
+                continue;
+            };
+            let key = (kind.label().to_ascii_lowercase(), object.name.to_ascii_lowercase());
+            self.object_index
+                .entry(key)
+                .or_default()
+                .push(IndexedObjectEntry {
+                    uri: uri.clone(),
+                    object_start_byte: object.start_byte,
+                });
+        }
+    }
+
+    fn remove_uri_from_object_index(&self, uri: &Url) {
+        self.object_index.retain(|_, entries| {
+            entries.retain(|entry| &entry.uri != uri);
+            !entries.is_empty()
+        });
     }
 
     /// Scan workspace roots for `.al` files and load them into the document map.
@@ -131,7 +183,7 @@ impl WorldState {
             }
 
             if let Some(doc) = DocumentState::new(&source) {
-                self.documents.insert(uri, doc);
+                self.upsert_document(uri, doc);
                 count += 1;
             }
         }
@@ -202,7 +254,7 @@ impl WorldState {
 
         match DocumentState::new(&source) {
             Some(doc) => {
-                self.documents.insert(uri.clone(), doc);
+                self.upsert_document(uri.clone(), doc);
                 true
             }
             None => {
@@ -210,11 +262,6 @@ impl WorldState {
                 false
             }
         }
-    }
-
-    /// Return the number of currently loaded documents.
-    pub fn document_count(&self) -> usize {
-        self.documents.len()
     }
 
     /// Reload a file from disk (e.g. after an external change notification).
@@ -226,7 +273,7 @@ impl WorldState {
 
         if !path.exists() {
             // File was deleted
-            self.documents.remove(uri);
+            self.remove_document(uri);
             return;
         }
 
@@ -236,7 +283,7 @@ impl WorldState {
         };
 
         if let Some(doc) = DocumentState::new(&source) {
-            self.documents.insert(uri.clone(), doc);
+            self.upsert_document(uri.clone(), doc);
         }
     }
 }
@@ -291,7 +338,7 @@ mod tests {
 
         let count = state.load_workspace_files();
         assert_eq!(count, 2, "should load exactly 2 .al files");
-        assert_eq!(state.document_count(), 2);
+        assert_eq!(state.documents.len(), 2);
     }
 
     #[test]
@@ -299,6 +346,6 @@ mod tests {
         let state = WorldState::new();
         let count = state.load_workspace_files();
         assert_eq!(count, 0);
-        assert_eq!(state.document_count(), 0);
+        assert_eq!(state.documents.len(), 0);
     }
 }

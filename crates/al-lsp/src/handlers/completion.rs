@@ -3,12 +3,14 @@ use std::collections::HashSet;
 use lsp_types::{CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse};
 
 use al_syntax::ast::{extract_name, AlSymbolKind};
+use al_syntax::document::DocumentState;
 use al_syntax::navigation::{
-    dot_context_at_offset, extract_type_object_name, identifier_context_at_offset, node_at_offset,
+    extract_type_object_name, identifier_context_at_offset, node_at_offset,
 };
 use al_syntax::symbols::al_keywords;
 
 use crate::convert::lsp_position_to_byte_offset;
+use crate::handlers::events::event_subscriber_completion_items;
 use crate::state::WorldState;
 
 #[derive(Debug, Clone)]
@@ -50,27 +52,19 @@ pub fn handle_completion(
     let prefix_lower = extract_prefix(&source, byte_offset).to_lowercase();
 
     let enum_context = enum_context_at_offset(&doc.tree, &source, byte_offset);
-    let where_value_context = where_value_completion_context_at_offset(&doc.tree, &source, byte_offset);
+    let where_value_context =
+        where_value_completion_context_at_offset(&doc.tree, &source, byte_offset);
     let property_context = property_completion_context_at_offset(&doc.tree, &source, byte_offset);
-
-    let dot_target = dot_context_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)
-        .and_then(|ctx| {
-            let id_ctx = identifier_context_at_offset(
-                &doc.tree,
-                &source,
-                &doc.symbol_table,
-                ctx.object_byte_offset,
-            )?;
-            let sym = id_ctx.symbol?;
-            if !matches!(sym.kind, AlSymbolKind::Variable | AlSymbolKind::Parameter) {
-                return None;
-            }
-            let type_info = sym.type_info.as_deref()?;
-            let (object_kind, object_name) = extract_type_object_name(type_info)?;
-            Some((object_kind.to_string(), object_name.to_string()))
-        });
+    let event_items = event_subscriber_completion_items(state, &source, byte_offset, &prefix_lower);
+    let dot_target = dot_target_at_offset(state, &doc, &source, byte_offset);
 
     drop(doc);
+
+    if let Some(items) = event_items {
+        if !items.is_empty() {
+            return Some(CompletionResponse::Array(items));
+        }
+    }
 
     if let Some(enum_context) = enum_context {
         if let Some(enum_name) = resolve_enum_name_from_context(state, &uri, &enum_context) {
@@ -188,6 +182,27 @@ fn collect_object_member_completions(
         }
     }
 
+    if let Some(methods) = builtin_methods_for_object_kind(object_kind) {
+        for method in methods {
+            if !prefix_lower.is_empty() && !method.to_lowercase().starts_with(prefix_lower) {
+                continue;
+            }
+            let key = method.to_lowercase();
+            if !seen.insert(key) {
+                continue;
+            }
+            items.push(CompletionItem {
+                label: (*method).to_string(),
+                kind: Some(CompletionItemKind::METHOD),
+                detail: Some(format!(
+                    "Built-in {} method",
+                    object_kind.trim_end_matches("_builtin")
+                )),
+                ..Default::default()
+            });
+        }
+    }
+
     items
 }
 
@@ -298,7 +313,13 @@ fn property_names_for_scope(scope: &str) -> &'static [&'static str] {
             "ToolTip",
             "ValidateTableRelation",
         ],
-        "key" => &["Clustered", "Enabled", "MaintainSQLIndex", "SumIndexFields", "Unique"],
+        "key" => &[
+            "Clustered",
+            "Enabled",
+            "MaintainSQLIndex",
+            "SumIndexFields",
+            "Unique",
+        ],
         "enum" => &[
             "Access",
             "AssignmentCompatibility",
@@ -328,7 +349,13 @@ fn property_names_for_scope(scope: &str) -> &'static [&'static str] {
             "UsageCategory",
             "WordLayout",
         ],
-        "query" => &["Access", "Caption", "ObsoleteReason", "ObsoleteState", "ObsoleteTag"],
+        "query" => &[
+            "Access",
+            "Caption",
+            "ObsoleteReason",
+            "ObsoleteState",
+            "ObsoleteTag",
+        ],
         "xmlport" => &[
             "Access",
             "Caption",
@@ -339,7 +366,13 @@ fn property_names_for_scope(scope: &str) -> &'static [&'static str] {
             "ObsoleteState",
             "ObsoleteTag",
         ],
-        "interface" => &["Access", "Caption", "ObsoleteReason", "ObsoleteState", "ObsoleteTag"],
+        "interface" => &[
+            "Access",
+            "Caption",
+            "ObsoleteReason",
+            "ObsoleteState",
+            "ObsoleteTag",
+        ],
         _ => &[],
     }
 }
@@ -627,6 +660,453 @@ fn completion_item_kind(kind: AlSymbolKind) -> CompletionItemKind {
     }
 }
 
+pub(crate) struct MemberAccessTarget {
+    pub object_kind: String,
+    pub object_name: String,
+    pub member_name: String,
+    pub is_method_call: bool,
+}
+
+fn dot_target_at_offset(
+    state: &WorldState,
+    doc: &DocumentState,
+    source: &str,
+    byte_offset: usize,
+) -> Option<(String, String)> {
+    if let Some((object_node, scope_byte)) =
+        object_node_for_member_access(&doc.tree, source, byte_offset)
+    {
+        if let Some(target) =
+            resolve_object_type_from_expression(state, doc, source, object_node, scope_byte, 0)
+        {
+            return Some(target);
+        }
+    }
+
+    let (object_start, object_name) = parse_object_before_trailing_dot(source, byte_offset)?;
+    resolve_object_type_from_symbol_name(doc, source, &object_name, object_start)
+}
+
+pub(crate) fn member_access_target_at_offset(
+    state: &WorldState,
+    doc: &DocumentState,
+    source: &str,
+    byte_offset: usize,
+) -> Option<MemberAccessTarget> {
+    let node = node_at_offset(&doc.tree, byte_offset)?;
+    if !matches!(node.kind(), "identifier" | "quoted_identifier") {
+        return None;
+    }
+
+    let parent = node.parent()?;
+    let (member_node, object_node, is_method_call) = match parent.kind() {
+        "method_call" => (
+            parent.child_by_field_name("method")?,
+            parent.child_by_field_name("object")?,
+            true,
+        ),
+        "member_access" => (
+            parent.child_by_field_name("member")?,
+            parent.child_by_field_name("object")?,
+            false,
+        ),
+        _ => return None,
+    };
+    if member_node.id() != node.id() {
+        return None;
+    }
+
+    let (object_kind, object_name) = resolve_object_type_from_expression(
+        state,
+        doc,
+        source,
+        object_node,
+        parent.start_byte(),
+        0,
+    )?;
+    Some(MemberAccessTarget {
+        object_kind,
+        object_name,
+        member_name: extract_name(node, source),
+        is_method_call,
+    })
+}
+
+fn object_node_for_member_access<'a>(
+    tree: &'a tree_sitter::Tree,
+    source: &str,
+    byte_offset: usize,
+) -> Option<(tree_sitter::Node<'a>, usize)> {
+    for probe in [
+        byte_offset.min(source.len()),
+        byte_offset.saturating_sub(1).min(source.len()),
+    ] {
+        if let Some(node) = node_at_offset(tree, probe) {
+            let mut current = Some(node);
+            while let Some(n) = current {
+                if matches!(n.kind(), "member_access" | "method_call") {
+                    let object_node = n.child_by_field_name("object")?;
+                    return Some((object_node, n.start_byte()));
+                }
+                current = n.parent();
+            }
+        }
+    }
+    None
+}
+
+fn parse_object_before_trailing_dot(source: &str, byte_offset: usize) -> Option<(usize, String)> {
+    let bytes = source.as_bytes();
+    if bytes.is_empty() || byte_offset == 0 {
+        return None;
+    }
+
+    let mut dot = byte_offset.min(bytes.len());
+    while dot > 0 && bytes[dot - 1].is_ascii_whitespace() {
+        dot -= 1;
+    }
+    if dot == 0 || bytes[dot - 1] != b'.' {
+        return None;
+    }
+
+    let mut left = dot - 1;
+    while left > 0 && bytes[left - 1].is_ascii_whitespace() {
+        left -= 1;
+    }
+    if left == 0 {
+        return None;
+    }
+
+    if bytes[left - 1] == b')' {
+        let mut depth = 1usize;
+        let mut cursor = left - 1;
+        while cursor > 0 {
+            cursor -= 1;
+            match bytes[cursor] {
+                b')' => depth += 1,
+                b'(' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return parse_identifier_segment(source, cursor);
+                    }
+                }
+                _ => {}
+            }
+        }
+        return None;
+    }
+
+    parse_identifier_segment(source, left)
+}
+
+fn resolve_object_type_from_symbol_name(
+    doc: &DocumentState,
+    source: &str,
+    object_name: &str,
+    scope_byte: usize,
+) -> Option<(String, String)> {
+    if object_name.eq_ignore_ascii_case("codeunit") {
+        return Some(("codeunit_builtin".to_string(), "CODEUNIT".to_string()));
+    }
+    if object_name.eq_ignore_ascii_case("page") {
+        return Some(("page_builtin".to_string(), "PAGE".to_string()));
+    }
+    if object_name.eq_ignore_ascii_case("report") {
+        return Some(("report_builtin".to_string(), "REPORT".to_string()));
+    }
+    if object_name.eq_ignore_ascii_case("xmlport") {
+        return Some(("xmlport_builtin".to_string(), "XMLPORT".to_string()));
+    }
+    if object_name.eq_ignore_ascii_case("query") {
+        return Some(("query_builtin".to_string(), "QUERY".to_string()));
+    }
+
+    let symbol = doc
+        .symbol_table
+        .lookup_in_scope(object_name, scope_byte)
+        .into_iter()
+        .find(|sym| {
+            matches!(
+                sym.kind,
+                AlSymbolKind::Variable | AlSymbolKind::Parameter | AlSymbolKind::Procedure
+            )
+        });
+    let type_info_owned = symbol
+        .and_then(|sym| sym.type_info.clone())
+        .or_else(|| fallback_procedure_return_type_from_source(source, object_name));
+    let type_info = type_info_owned.as_deref()?;
+    let (object_kind, object_name) = extract_type_object_name(type_info)?;
+    Some((object_kind.to_string(), object_name.to_string()))
+}
+
+pub(crate) fn resolve_object_type_from_expression(
+    state: &WorldState,
+    doc: &DocumentState,
+    source: &str,
+    expr_node: tree_sitter::Node<'_>,
+    scope_byte: usize,
+    depth: u8,
+) -> Option<(String, String)> {
+    if depth > 8 {
+        return None;
+    }
+
+    let expr_node = unwrap_primary_expression(expr_node);
+    match expr_node.kind() {
+        "identifier" | "quoted_identifier" => resolve_object_type_from_symbol_name(
+            doc,
+            source,
+            &extract_name(expr_node, source),
+            scope_byte,
+        ),
+        "function_call" => {
+            let function_node = expr_node
+                .child_by_field_name("function")
+                .or_else(|| expr_node.child_by_field_name("name"))?;
+            let function_name = extract_name(function_node, source);
+            resolve_object_type_from_symbol_name(
+                doc,
+                source,
+                &function_name,
+                expr_node.start_byte(),
+            )
+        }
+        "method_call" => {
+            let object_node = expr_node.child_by_field_name("object")?;
+            let method_node = expr_node.child_by_field_name("method")?;
+            let method_name = extract_name(method_node, source);
+            let (object_kind, object_name) = resolve_object_type_from_expression(
+                state,
+                doc,
+                source,
+                object_node,
+                expr_node.start_byte(),
+                depth + 1,
+            )?;
+            let member_type =
+                find_object_member_type(state, &object_kind, &object_name, &method_name, true)?;
+            let (member_kind, member_name) = extract_type_object_name(&member_type)?;
+            Some((member_kind.to_string(), member_name.to_string()))
+        }
+        "member_access" => {
+            let object_node = expr_node.child_by_field_name("object")?;
+            let member_node = expr_node.child_by_field_name("member")?;
+            let member_name = extract_name(member_node, source);
+            let (object_kind, object_name) = resolve_object_type_from_expression(
+                state,
+                doc,
+                source,
+                object_node,
+                expr_node.start_byte(),
+                depth + 1,
+            )?;
+            let member_type =
+                find_object_member_type(state, &object_kind, &object_name, &member_name, false)?;
+            let (member_kind, member_name) = extract_type_object_name(&member_type)?;
+            Some((member_kind.to_string(), member_name.to_string()))
+        }
+        _ => None,
+    }
+}
+
+fn fallback_procedure_return_type_from_source(
+    source: &str,
+    procedure_name: &str,
+) -> Option<String> {
+    let lower = source.to_ascii_lowercase();
+    let name_lower = procedure_name.to_ascii_lowercase();
+    let mut cursor = 0usize;
+
+    while cursor < lower.len() {
+        let Some(proc_rel) = lower[cursor..].find("procedure") else {
+            break;
+        };
+        let proc_start = cursor + proc_rel;
+        let line_end = source[proc_start..]
+            .find('\n')
+            .map(|i| proc_start + i)
+            .unwrap_or(source.len());
+        let signature = &source[proc_start..line_end];
+        let signature_lower = signature.to_ascii_lowercase();
+        if let Some(name_pos) = signature_lower.find(&name_lower) {
+            let after_name = &signature[name_pos + procedure_name.len()..];
+            if let Some(close_paren) = after_name.find(')') {
+                let after_params = &after_name[close_paren + 1..];
+                if let Some(colon) = after_params.find(':') {
+                    let return_type = after_params[colon + 1..]
+                        .trim()
+                        .trim_end_matches(';')
+                        .trim();
+                    if !return_type.is_empty() {
+                        return Some(return_type.to_string());
+                    }
+                }
+            }
+        }
+        cursor = proc_start + "procedure".len();
+    }
+
+    None
+}
+
+fn find_object_member_type(
+    state: &WorldState,
+    object_kind: &str,
+    object_name: &str,
+    member_name: &str,
+    require_procedure: bool,
+) -> Option<String> {
+    for entry in state.documents.iter() {
+        for symbol in &entry.value().symbol_table.symbols {
+            let AlSymbolKind::Object(kind) = symbol.kind else {
+                continue;
+            };
+            if !kind.label().eq_ignore_ascii_case(object_kind)
+                || !symbol.name.eq_ignore_ascii_case(object_name)
+            {
+                continue;
+            }
+            for child in &symbol.children {
+                if !child.name.eq_ignore_ascii_case(member_name) {
+                    continue;
+                }
+                if require_procedure && !matches!(child.kind, AlSymbolKind::Procedure) {
+                    continue;
+                }
+                if let Some(type_info) = child.type_info.as_deref() {
+                    return Some(type_info.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn builtin_record_methods() -> &'static [&'static str] {
+    &[
+        "AddLink",
+        "Ascending",
+        "CalcFields",
+        "CalcSums",
+        "ChangeCompany",
+        "Copy",
+        "CopyFilters",
+        "Count",
+        "Delete",
+        "DeleteAll",
+        "DeleteLinks",
+        "Find",
+        "FindFirst",
+        "FindLast",
+        "FindSet",
+        "FieldCaption",
+        "Get",
+        "GetByRecordId",
+        "GetBySystemId",
+        "GetFilters",
+        "GetPosition",
+        "HasFilter",
+        "Init",
+        "Insert",
+        "IsEmpty",
+        "LockTable",
+        "Mark",
+        "MarkedOnly",
+        "Modify",
+        "ModifyAll",
+        "Next",
+        "ReadIsolation",
+        "RecordId",
+        "Rename",
+        "Reset",
+        "SetAutoCalcFields",
+        "SetCurrentKey",
+        "SetFilter",
+        "SetLoadFields",
+        "SetPosition",
+        "SetRange",
+        "SetRecFilter",
+        "TableCaption",
+        "TestField",
+        "TransferFields",
+        "Validate",
+    ]
+}
+
+fn builtin_codeunit_methods() -> &'static [&'static str] {
+    &["Run"]
+}
+
+fn builtin_page_methods() -> &'static [&'static str] {
+    &["Run", "RunModal", "SetRecord", "GetRecord", "Update", "Close"]
+}
+
+fn builtin_report_methods() -> &'static [&'static str] {
+    &[
+        "Run",
+        "RunModal",
+        "Print",
+        "SaveAs",
+        "Execute",
+        "SetTableView",
+        "SetRecord",
+        "UseRequestPage",
+    ]
+}
+
+fn builtin_xmlport_methods() -> &'static [&'static str] {
+    &["Run", "Import", "Export", "SetSource", "SetDestination"]
+}
+
+fn builtin_query_methods() -> &'static [&'static str] {
+    &["Open", "Read", "Close", "SaveAsXml", "SetFilter"]
+}
+
+fn builtin_list_methods() -> &'static [&'static str] {
+    &[
+        "Add",
+        "AddRange",
+        "Contains",
+        "Count",
+        "Get",
+        "GetRange",
+        "IndexOf",
+        "Insert",
+        "Remove",
+        "RemoveAt",
+        "Set",
+    ]
+}
+
+fn builtin_dictionary_methods() -> &'static [&'static str] {
+    &[
+        "Add",
+        "ContainsKey",
+        "ContainsValue",
+        "Count",
+        "Get",
+        "Keys",
+        "Remove",
+        "Set",
+        "Values",
+    ]
+}
+
+fn builtin_methods_for_object_kind(object_kind: &str) -> Option<&'static [&'static str]> {
+    match object_kind.to_ascii_lowercase().as_str() {
+        "table" => Some(builtin_record_methods()),
+        "codeunit" => Some(builtin_codeunit_methods()),
+        "page" | "page_builtin" => Some(builtin_page_methods()),
+        "report" | "report_builtin" => Some(builtin_report_methods()),
+        "xmlport" | "xmlport_builtin" => Some(builtin_xmlport_methods()),
+        "query" | "query_builtin" => Some(builtin_query_methods()),
+        "list" => Some(builtin_list_methods()),
+        "dictionary" => Some(builtin_dictionary_methods()),
+        "codeunit_builtin" => Some(builtin_codeunit_methods()),
+        _ => None,
+    }
+}
+
 /// Extract the word prefix before the cursor position.
 fn extract_prefix(source: &str, byte_offset: usize) -> &str {
     let before = &source[..byte_offset.min(source.len())];
@@ -789,7 +1269,9 @@ fn property_completion_context_from_node(
                 return Some(PropertyCompletionContext::Values { property_name });
             }
         }
-        let snippet_end = byte_offset.min(property_node.end_byte()).max(property_node.start_byte());
+        let snippet_end = byte_offset
+            .min(property_node.end_byte())
+            .max(property_node.start_byte());
         let snippet = &source[property_node.start_byte()..snippet_end];
         if snippet.contains('=') {
             return Some(PropertyCompletionContext::Values { property_name });
@@ -1001,10 +1483,7 @@ fn unwrap_primary_expression(mut node: tree_sitter::Node<'_>) -> tree_sitter::No
     node
 }
 
-fn extract_identifier_info(
-    node: tree_sitter::Node<'_>,
-    source: &str,
-) -> Option<(usize, String)> {
+fn extract_identifier_info(node: tree_sitter::Node<'_>, source: &str) -> Option<(usize, String)> {
     let node = unwrap_primary_expression(node);
     if matches!(node.kind(), "identifier" | "quoted_identifier") {
         return Some((node.start_byte(), extract_name(node, source)));
@@ -1137,7 +1616,10 @@ fn collect_enum_value_usages(
     }
 }
 
-fn find_ancestor_of_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+fn find_ancestor_of_kind<'a>(
+    node: tree_sitter::Node<'a>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'a>> {
     let mut current = Some(node);
     while let Some(n) = current {
         if n.kind() == kind {
@@ -1329,6 +1811,373 @@ mod tests {
     }
 
     #[test]
+    fn test_completion_dot_record_includes_builtin_methods() {
+        let source = r#"table 18 Customer
+{
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.Fi
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let params = make_completion_params(uri, 10, 15);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "FindFirst"),
+            "expected built-in Record method FindFirst, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "FindSet"),
+            "expected built-in Record method FindSet, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_list_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Tags: List of [Text];
+    begin
+        Tags.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Tags.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Add"),
+            "expected List built-in method Add, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Count"),
+            "expected List built-in method Count, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_dictionary_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Tags: Dictionary of [Text, Text];
+    begin
+        Tags.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Tags.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "ContainsKey"),
+            "expected Dictionary built-in method ContainsKey, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Values"),
+            "expected Dictionary built-in method Values, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_procedure_return_interface() {
+        let source = r#"interface "Demo IFunctions"
+{
+    procedure NumberPad(KeyText: Text; KeyValue: Integer);
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        HelperFunc.
+    end;
+
+    local procedure HelperFunc(): Interface "Demo IFunctions";
+    begin
+        exit(ServiceLocator.CoreFunctions());
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "HelperFunc.");
+        let doc = state.documents.get(&uri).unwrap();
+        let source_text = doc.source();
+        assert_eq!(
+            fallback_procedure_return_type_from_source(&source_text, "HelperFunc"),
+            Some("Interface \"Demo IFunctions\"".to_string())
+        );
+        let byte_offset =
+            crate::convert::lsp_position_to_byte_offset(&doc.rope, Position { line, character })
+                .unwrap();
+        assert_eq!(source_text.as_bytes()[byte_offset - 1], b'.');
+        assert_eq!(
+            parse_object_before_trailing_dot(&source_text, byte_offset),
+            Some((source_text.find("HelperFunc.").unwrap(), "HelperFunc".to_string()))
+        );
+        assert_eq!(
+            resolve_object_type_from_symbol_name(
+                &doc,
+                &source_text,
+                "HelperFunc",
+                source_text.find("HelperFunc.").unwrap()
+            ),
+            Some(("interface".to_string(), "Demo IFunctions".to_string()))
+        );
+        let dot_target = dot_target_at_offset(&state, &doc, &source_text, byte_offset);
+        assert_eq!(
+            dot_target,
+            Some(("interface".to_string(), "Demo IFunctions".to_string()))
+        );
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "NumberPad"),
+            "expected interface member NumberPad, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_procedure_call_return_interface() {
+        let source = r#"interface "Demo IFunctions"
+{
+    procedure NumberPad(KeyText: Text; KeyValue: Integer);
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        HelperFunc().
+    end;
+
+    local procedure HelperFunc(): Interface "Demo IFunctions";
+    begin
+        exit(ServiceLocator.CoreFunctions());
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "HelperFunc().");
+        let doc = state.documents.get(&uri).unwrap();
+        let source_text = doc.source();
+        assert_eq!(
+            fallback_procedure_return_type_from_source(&source_text, "HelperFunc"),
+            Some("Interface \"Demo IFunctions\"".to_string())
+        );
+        let byte_offset =
+            crate::convert::lsp_position_to_byte_offset(&doc.rope, Position { line, character })
+                .unwrap();
+        assert_eq!(source_text.as_bytes()[byte_offset - 1], b'.');
+        assert_eq!(
+            parse_object_before_trailing_dot(&source_text, byte_offset),
+            Some((
+                source_text.find("HelperFunc().").unwrap(),
+                "HelperFunc".to_string()
+            ))
+        );
+        assert_eq!(
+            resolve_object_type_from_symbol_name(
+                &doc,
+                &source_text,
+                "HelperFunc",
+                source_text.find("HelperFunc().").unwrap()
+            ),
+            Some(("interface".to_string(), "Demo IFunctions".to_string()))
+        );
+        let dot_target = dot_target_at_offset(&state, &doc, &source_text, byte_offset);
+        assert_eq!(
+            dot_target,
+            Some(("interface".to_string(), "Demo IFunctions".to_string()))
+        );
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "NumberPad"),
+            "expected interface member NumberPad, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_codeunit_builtin_run() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        CODEUNIT.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let params = make_completion_params(uri, 4, 17);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Run"),
+            "expected CODEUNIT built-in Run method, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_page_builtin_runmodal() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        PAGE.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let params = make_completion_params(uri, 4, 13);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "RunModal"),
+            "expected PAGE built-in RunModal method, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_report_builtin_runmodal() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        REPORT.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let params = make_completion_params(uri, 4, 15);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "RunModal"),
+            "expected REPORT built-in RunModal method, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_query_variable_includes_open_read_close() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Q: Query "Customer Sales";
+    begin
+        Q.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let params = make_completion_params(uri, 6, 10);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Open"),
+            "expected Query built-in Open method, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Read"),
+            "expected Query built-in Read method, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Close"),
+            "expected Query built-in Close method, got: {labels:?}"
+        );
+    }
+
+    #[test]
     fn test_completion_enum_values_after_double_colon() {
         let source = r#"enum 50100 MyEnum
 {
@@ -1479,6 +2328,84 @@ codeunit 50100 Test
         assert!(
             labels.iter().any(|l| l == "Invoice"),
             "expected Invoice enum value in completion, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_event_subscriber_object_reference() {
+        let publisher_source = r#"codeunit 50100 "My Publisher"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnAfterPost()
+    begin
+    end;
+}"#;
+        let subscriber_source = r#"codeunit 50101 "My Subscriber"
+{
+    [EventSubscriber(ObjectType::Codeunit, )]
+    local procedure HandleOnAfterPost()
+    begin
+    end;
+}"#;
+        let publisher_uri = Url::parse("file:///test/publisher.al").unwrap();
+        let subscriber_uri = Url::parse("file:///test/subscriber.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(publisher_uri, DocumentState::new(publisher_source).unwrap());
+        state.documents.insert(
+            subscriber_uri.clone(),
+            DocumentState::new(subscriber_source).unwrap(),
+        );
+
+        let (line, character) = cursor_after(subscriber_source, "ObjectType::Codeunit, ");
+        let params = make_completion_params(subscriber_uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Codeunit::\"My Publisher\""),
+            "expected codeunit object reference completion, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_event_subscriber_event_name() {
+        let source = r#"codeunit 50100 "My Publisher"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnAfterPost()
+    begin
+    end;
+}
+
+codeunit 50101 "My Subscriber"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"My Publisher", '', '', false, false)]
+    local procedure HandleOnAfterPost()
+    begin
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Codeunit::\"My Publisher\", '");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "OnAfterPost"),
+            "expected event publisher completion, got: {labels:?}"
         );
     }
 

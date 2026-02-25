@@ -64,10 +64,46 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_interface_without_method_semicolons() {
+        let source = r#"interface "Demo IFunctions"
+{
+    Access = Internal;
+
+    procedure ReadLocalVar(var LastSlipNo: Code[20])
+    procedure WriteLocalVar(LastSlipNo: Code[20])
+    procedure RetrieveSusp(SlipNumber: Code[20]; var ErrorText: Text): Boolean
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert_eq!(root.kind(), "source_file");
+        assert!(
+            !root.has_error(),
+            "tree has errors for interface methods without semicolons: {}",
+            root.to_sexp()
+        );
+    }
+
+    #[test]
+    fn test_parse_interface_named_return_without_semicolon() {
+        let source = r#"interface "Demo IFunctions"
+{
+    procedure InsertTmpTrans(var LastSlipNo: Code[20]; ShiftNo: Code[1]; SetSalesType: Code[20]; TableNo: Integer; TrainingActive: Boolean; TableDescr: Text) NewSlipNo: Code[20]
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert_eq!(root.kind(), "source_file");
+        assert!(
+            !root.has_error(),
+            "tree has errors for interface named return without semicolon: {}",
+            root.to_sexp()
+        );
+    }
+
+    #[test]
     fn test_parse_address_provider_fixture() {
         let source = r#"interface IAddressProvider
 {
-    procedure GetAddress(): Text
+    procedure GetAddress(): Text;
 }
 
 codeunit 50200 CompanyAddressProvider implements IAddressProvider
@@ -178,9 +214,25 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
 {
     procedure DoWork()
     var
-        ServiceLocator: Codeunit "LSC Service Locator";
+        ServiceLocator: Codeunit "Demo Service Locator";
         MyPage: Page "Customer Card";
         MyReport: Report "Sales Invoice";
+    begin
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_dictionary_and_list_primitives() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        dict: Dictionary of [Text, Text];
+        userGeneratedTags: List of [Text];
     begin
     end;
 }"#;
@@ -211,7 +263,7 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
     }
 
     #[test]
-    fn test_parse_incomplete_qualified_enum_value_has_error() {
+    fn test_parse_incomplete_qualified_enum_value_is_permitted() {
         let source = r#"codeunit 50100 Test
 {
     procedure DoWork()
@@ -224,14 +276,14 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
         let tree = parse(source).expect("parse failed");
         let root = tree.root_node();
         assert!(
-            root.has_error(),
-            "tree should flag incomplete qualified enum value as invalid: {}",
+            !root.has_error(),
+            "tree should allow incomplete qualified enum value for completion scenarios: {}",
             root.to_sexp()
         );
     }
 
     #[test]
-    fn test_parse_incomplete_qualified_enum_value_on_member_access_has_error() {
+    fn test_parse_incomplete_qualified_enum_value_on_member_access_is_permitted() {
         let source = r#"table 50100 Customer
 {
     fields
@@ -254,8 +306,8 @@ codeunit 50100 Test
         let tree = parse(source).expect("parse failed");
         let root = tree.root_node();
         assert!(
-            root.has_error(),
-            "tree should flag incomplete member-access enum qualification as invalid: {}",
+            !root.has_error(),
+            "tree should allow incomplete member-access enum qualification for completion scenarios: {}",
             root.to_sexp()
         );
     }
@@ -266,7 +318,7 @@ codeunit 50100 Test
 {
     procedure DoWork()
     var
-        LineRec, NewLine: Record "LSC POS Trans. Line";
+        LineRec, NewLine: Record "Demo Trans. Line";
     begin
     end;
 }"#;
@@ -334,5 +386,169 @@ codeunit 50100 Test
         let tree = parse(source).expect("parse failed");
         let root = tree.root_node();
         assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_temporal_literals() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        LineRec: Record "Sales Line";
+        D: Date;
+        T: Time;
+        DT: DateTime;
+    begin
+        if (LineRec."Customer Order Line") and (LineRec."Trans. Time" = 0T) then begin
+        end;
+        D := 0D;
+        T := 0T;
+        DT := 0DT;
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_in_operator_with_interval_range() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        OfferValidFromDate: Date;
+        OfferValidToDate: Date;
+    begin
+        if (Today in [OfferValidFromDate .. OfferValidToDate]) then begin
+        end;
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+        let sexp = root.to_sexp();
+        assert!(
+            sexp.contains("range_expression"),
+            "expected range_expression in tree: {sexp}"
+        );
+    }
+
+    #[test]
+    fn test_parse_codeunit_run_invocation() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        FunctionSetup2: Record "Function Setup";
+        MenuLine2_l: Record "Menu Line";
+    begin
+        CODEUNIT.Run(FunctionSetup2."Run Codeunit", MenuLine2_l);
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_page_usercontrol_scanner_dialog() {
+        let source = r#"page 99008876 "Scanner Dialog"
+{
+    ApplicationArea = All;
+    Caption = 'Barcode scanning';
+    Editable = false;
+    PageType = Document;
+    SourceTable = "Scanner";
+
+    layout
+    {
+        area(content)
+        {
+            usercontrol(control; "DialogHost")
+            {
+                trigger AddInReady(data: Text)
+                begin
+                    CurrPage.control.SendRequestToAddInEx('SCANNER:SCANDATA', '', '');
+                end;
+            }
+        }
+    }
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_report_with_nested_dataitems_requestpage_and_labels() {
+        let source = r#"report 10000712 "Stores In Location Profile"
+{
+    DefaultLayout = RDLC;
+    RDLCLayout = 'src/MicrosoftExtension/Layouts/Stores In Location Profile.rdlc';
+
+    dataset
+    {
+        dataitem(Store; "Store")
+        {
+            DataItemTableView = SORTING("No.") ORDER(Ascending);
+            PrintOnlyIfDetail = true;
+            column(Name; Store.Name)
+            {
+            }
+            dataitem("Inventory Lookup Table"; "Inventory Lookup Table")
+            {
+                DataItemLink = "Store No." = FIELD("No.");
+                column(ItemNo_Test; "Inventory Lookup Table"."Item No.")
+                {
+                }
+            }
+        }
+    }
+
+    requestpage
+    {
+        layout
+        {
+        }
+    }
+
+    labels
+    {
+    }
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_tablerelation_if_else_expression() {
+        let source = r#"table 50100 "Dummy Config"
+{
+    fields
+    {
+        field(1; "Restaurant No."; Code[20])
+        {
+        }
+        field(2; "Target Restaurant"; Code[20])
+        {
+        }
+        field(3; "Dining Area Id"; Integer)
+        {
+            TableRelation = IF ("Target Restaurant" = FILTER('')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Restaurant No."))
+                            ELSE
+                            IF ("Target Restaurant" = FILTER(<> '')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Target Restaurant"));
+        }
+    }
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+        let sexp = root.to_sexp();
+        assert!(
+            sexp.contains("table_relation_if_expression"),
+            "expected table_relation_if_expression in tree: {sexp}"
+        );
     }
 }

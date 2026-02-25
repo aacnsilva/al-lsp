@@ -6,10 +6,15 @@ use al_syntax::navigation::{
     find_interface_method_calls, identifier_context_at_offset, interface_method_call_at_offset,
 };
 
+use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
 use crate::handlers::completion::{
     enum_value_target_at_offset, enum_value_usages_in_tree, resolve_enum_name_from_context,
 };
-use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
+use crate::handlers::events::{
+    event_invocation_target_at_offset, event_publisher_target_at_offset,
+    event_subscriber_context_at_offset, find_event_invocation_usages, find_event_publishers,
+    find_event_subscriber_usages,
+};
 use crate::state::WorldState;
 
 pub fn handle_references(state: &WorldState, params: ReferenceParams) -> Option<Vec<Location>> {
@@ -78,6 +83,55 @@ pub fn handle_references(state: &WorldState, params: ReferenceParams) -> Option<
         }
         return Some(locations);
     }
+
+    let event_target = event_subscriber_context_at_offset(&doc.tree, &source, byte_offset)
+        .and_then(|ctx| (ctx.arg_index >= 2).then_some(ctx.target).flatten())
+        .or_else(|| event_publisher_target_at_offset(&doc.tree, &source, byte_offset))
+        .or_else(|| {
+            event_invocation_target_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)
+        });
+
+    let doc = if let Some(target) = event_target {
+        drop(doc);
+        let publishers = find_event_publishers(state, &target);
+        if !publishers.is_empty() {
+            let mut locations = Vec::new();
+
+            if include_declaration {
+                for publisher in &publishers {
+                    locations.push(Location {
+                        uri: publisher.uri.clone(),
+                        range: ts_range_to_lsp_range(publisher.name_start, publisher.name_end),
+                    });
+                }
+            }
+
+            for usage in find_event_subscriber_usages(state, &target) {
+                locations.push(Location {
+                    uri: usage.uri,
+                    range: ts_range_to_lsp_range(usage.start, usage.end),
+                });
+            }
+
+            for usage in find_event_invocation_usages(state, &target) {
+                locations.push(Location {
+                    uri: usage.uri,
+                    range: ts_range_to_lsp_range(usage.start, usage.end),
+                });
+            }
+
+            if !locations.is_empty() {
+                return Some(locations);
+            }
+
+            return None;
+        }
+
+        state.documents.get(&uri)?
+    } else {
+        doc
+    };
+    let source = doc.source();
 
     // First, check if the cursor is on the method part of an interface-typed method call
     // (e.g. `AddressProvider.GetAddress()` where AddressProvider is `Interface IAddressProvider`).
@@ -209,11 +263,17 @@ pub fn handle_references(state: &WorldState, params: ReferenceParams) -> Option<
     }
 
     // Gather cross-document reference info before dropping the doc borrow.
-    let iface_method = doc.symbol_table.interface_method_at(byte_offset)
+    let iface_method = doc
+        .symbol_table
+        .interface_method_at(byte_offset)
         .map(|(i, m)| (i.to_string(), m.to_string()));
-    let impl_proc = doc.symbol_table.implementation_procedure_at(byte_offset)
+    let impl_proc = doc
+        .symbol_table
+        .implementation_procedure_at(byte_offset)
         .map(|(ifaces, m)| (ifaces.to_vec(), m.to_string()));
-    let cu_proc = doc.symbol_table.codeunit_procedure_at(byte_offset)
+    let cu_proc = doc
+        .symbol_table
+        .codeunit_procedure_at(byte_offset)
         .map(|(obj, m)| (obj.to_string(), m.to_string()));
 
     drop(doc);
@@ -601,6 +661,55 @@ codeunit 50201 CompanyAddressProvider2 implements IAddressProvider
     }
 
     #[test]
+    fn test_references_on_interface_method_call_without_parentheses() {
+        // Cursor on GetAddress in `IAddressProvider.GetAddress;` should behave the same
+        // as `IAddressProvider.GetAddress()` and resolve to the interface method.
+        let source = r#"interface IAddressProvider
+{
+    procedure GetAddress(): Text;
+}
+
+codeunit 50200 CompanyAddressProvider implements IAddressProvider
+{
+    procedure GetAddress(): Text
+    begin
+    end;
+
+    procedure HelloWorld()
+    var
+        IAddressProvider: Interface IAddressProvider;
+    begin
+        IAddressProvider.GetAddress;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        // `IAddressProvider.GetAddress;` line (0-indexed) = 15.
+        // 8 spaces + `IAddressProvider.` = 25, so GetAddress starts at col 25.
+        let params = make_ref_params(uri, 15, 25, true);
+        let result = handle_references(&state, params);
+
+        assert!(
+            result.is_some(),
+            "expected references for no-parentheses interface call"
+        );
+        let locs = result.unwrap();
+        let lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+        assert!(
+            lines.contains(&2),
+            "expected interface declaration line 2 in references, got: {lines:?}"
+        );
+        assert!(
+            lines.contains(&15),
+            "expected call-site line 15 in references, got: {lines:?}"
+        );
+    }
+
+    #[test]
     fn test_references_codeunit_method_call() {
         // Cursor on HelloWorld2 in the procedure declaration of CompanyAddressProvider2.
         // References should include the call site CompanyAddressProvider2.HelloWorld2().
@@ -755,6 +864,49 @@ codeunit 50201 CompanyAddressProvider2 implements IAddressProvider
     }
 
     #[test]
+    fn test_references_from_codeunit_method_call_site_without_parentheses() {
+        // Cursor on HelloWorld2 in the call site CompanyAddressProvider2.HelloWorld2;
+        // should still resolve to the procedure definition.
+        let source = r#"codeunit 50200 CompanyAddressProvider
+{
+    procedure HelloWorld()
+    var
+        CompanyAddressProvider2: codeunit CompanyAddressProvider2;
+    begin
+        CompanyAddressProvider2.HelloWorld2;
+    end;
+}
+
+codeunit 50201 CompanyAddressProvider2
+{
+    procedure HelloWorld2()
+    begin
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        // `CompanyAddressProvider2.HelloWorld2;` line (0-indexed) = 6.
+        // 8 spaces + `CompanyAddressProvider2.` = 32, so HelloWorld2 starts at col 32.
+        let params = make_ref_params(uri.clone(), 6, 32, true);
+        let result = handle_references(&state, params);
+
+        assert!(
+            result.is_some(),
+            "expected references from no-parentheses codeunit call"
+        );
+        let locs = result.unwrap();
+        let lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+        assert!(
+            lines.contains(&12),
+            "expected procedure definition on line 12, got: {lines:?}"
+        );
+    }
+
+    #[test]
     fn test_references_enum_value_from_qualified_usage() {
         let source = r#"enum 50100 MyEnum
 {
@@ -901,6 +1053,61 @@ codeunit 50100 Test
             lines.contains(&2),
             "expected declaration on line 2, got: {lines:?}"
         );
-        assert!(lines.contains(&13), "expected usage on line 13, got: {lines:?}");
+        assert!(
+            lines.contains(&13),
+            "expected usage on line 13, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_references_event_publisher_includes_subscriber_attributes() {
+        let publisher_source = r#"codeunit 50100 "My Publisher"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnAfterPost()
+    begin
+    end;
+
+    procedure Raise()
+    begin
+        OnAfterPost();
+    end;
+}"#;
+        let subscriber_source = r#"codeunit 50101 "My Subscriber"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"My Publisher", 'OnAfterPost', '', false, false)]
+    local procedure HandleOnAfterPost()
+    begin
+    end;
+}"#;
+        let publisher_uri = Url::parse("file:///test/publisher.al").unwrap();
+        let subscriber_uri = Url::parse("file:///test/subscriber.al").unwrap();
+        let state = WorldState::new();
+        state.documents.insert(
+            publisher_uri.clone(),
+            DocumentState::new(publisher_source).unwrap(),
+        );
+        state.documents.insert(
+            subscriber_uri.clone(),
+            DocumentState::new(subscriber_source).unwrap(),
+        );
+
+        // Cursor on publisher procedure name `OnAfterPost` (line 3).
+        let params = make_ref_params(publisher_uri.clone(), 3, 15, true);
+        let result = handle_references(&state, params);
+        assert!(
+            result.is_some(),
+            "expected event publisher references to include subscribers"
+        );
+        let locs = result.unwrap();
+        assert!(
+            locs.iter().any(|l| l.uri == subscriber_uri),
+            "expected subscriber attribute usage in references, got: {locs:?}"
+        );
+        assert!(
+            locs.iter()
+                .any(|l| l.uri == publisher_uri && l.range.start.line == 9),
+            "expected event invocation usage in publisher document, got: {locs:?}"
+        );
     }
 }

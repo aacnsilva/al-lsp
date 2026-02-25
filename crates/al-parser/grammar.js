@@ -40,7 +40,6 @@ module.exports = grammar({
 
   conflicts: ($) => [
     [$.var_section],
-    [$.simple_type, $.sized_type],
   ],
 
   rules: {
@@ -167,6 +166,8 @@ module.exports = grammar({
           $.layout_section,
           $.actions_section,
           $.dataset_section,
+          $.requestpage_section,
+          $.labels_section,
           $._named_section
         )
       ),
@@ -192,8 +193,8 @@ module.exports = grammar({
         "(",
         field("parameters", optional($.parameter_list)),
         ")",
-        optional(field("return_type", $.return_type)),
-        ";"
+        optional(field("return_type", $.interface_return_type)),
+        optional(";")
       ),
 
     // ─── Property ────────────────────────────────────────────
@@ -210,10 +211,13 @@ module.exports = grammar({
       choice(
         $.table_relation_expression,
         $.calc_formula_expression,
+        $.table_view_expression,
+        $.dataitem_link_expression,
         $.property_option_value,
         $.string_literal,
         $.integer_literal,
         $.decimal_literal,
+        $.temporal_literal,
         $.boolean_literal,
         $.identifier,
         $.quoted_identifier,
@@ -221,6 +225,40 @@ module.exports = grammar({
         seq($.identifier, "::", $.identifier),
         // Property list: field1, field2
         commaSep1(choice($.identifier, $.quoted_identifier))
+      ),
+
+    table_view_expression: ($) =>
+      seq($.table_view_clause, repeat($.table_view_clause)),
+
+    table_view_clause: ($) =>
+      choice(
+        seq(kw("sorting"), "(", commaSep1(choice($.identifier, $.quoted_identifier)), ")"),
+        seq(kw("order"), "(", choice(kw("ascending"), kw("descending"), $.identifier, $.quoted_identifier), ")"),
+        $.where_clause
+      ),
+
+    dataitem_link_expression: ($) =>
+      commaSep1($.dataitem_link_condition),
+
+    dataitem_link_condition: ($) =>
+      seq(
+        field("field", choice($.identifier, $.quoted_identifier, $.member_access)),
+        "=",
+        field(
+          "value",
+          choice(
+            $.field_reference,
+            $.const_reference,
+            $.filter_reference,
+            $.identifier,
+            $.quoted_identifier,
+            $.string_literal,
+            $.integer_literal,
+            $.decimal_literal,
+            $.temporal_literal,
+            $.boolean_literal
+          )
+        )
       ),
 
     property_option_value: ($) =>
@@ -234,6 +272,7 @@ module.exports = grammar({
           $.string_literal,
           $.integer_literal,
           $.decimal_literal,
+          $.temporal_literal,
           $.boolean_literal,
           $.identifier,
           $.quoted_identifier
@@ -241,6 +280,12 @@ module.exports = grammar({
       ),
 
     table_relation_expression: ($) =>
+      choice(
+        $.table_relation_if_expression,
+        $.table_relation_target_expression
+      ),
+
+    table_relation_target_expression: ($) =>
       choice(
         seq(
           field("relation", $.member_access),
@@ -251,6 +296,29 @@ module.exports = grammar({
           field("where", $.where_clause)
         )
       ),
+
+    table_relation_if_expression: ($) =>
+      prec.right(
+        seq(
+          kw("if"),
+          "(",
+          $.table_relation_condition,
+          ")",
+          $.table_relation_target_expression,
+          optional(
+            seq(
+              kw("else"),
+              choice(
+                $.table_relation_if_expression,
+                $.table_relation_target_expression
+              )
+            )
+          )
+        )
+      ),
+
+    table_relation_condition: ($) =>
+      $.where_condition,
 
     calc_formula_expression: ($) =>
       seq(
@@ -309,6 +377,7 @@ module.exports = grammar({
         $.string_literal,
         $.integer_literal,
         $.decimal_literal,
+        $.temporal_literal,
         $.boolean_literal,
         $.identifier,
         $.quoted_identifier
@@ -403,10 +472,39 @@ module.exports = grammar({
       seq(kw("actions"), "{", repeat($._named_section), "}"),
 
     dataset_section: ($) =>
-      seq(kw("dataset"), "{", repeat($._named_section), "}"),
+      seq(kw("dataset"), "{", repeat(choice($._named_section, $.dataitem_declaration)), "}"),
+
+    requestpage_section: ($) =>
+      seq(
+        kw("requestpage"),
+        "{",
+        repeat(
+          choice(
+            $.property,
+            $.layout_section,
+            $.actions_section,
+            $.trigger_declaration,
+            $.procedure_declaration,
+            $.var_section,
+            $._named_section
+          )
+        ),
+        "}"
+      ),
+
+    labels_section: ($) =>
+      seq(kw("labels"), "{", repeat($.property), "}"),
 
     _named_section: ($) =>
-      choice($.area_section, $.group_section, $.page_field, $.page_action, $.part_section, $.repeater_section),
+      choice(
+        $.area_section,
+        $.group_section,
+        $.page_field,
+        $.page_action,
+        $.part_section,
+        $.repeater_section,
+        $.usercontrol_section
+      ),
 
     area_section: ($) =>
       seq(
@@ -478,13 +576,68 @@ module.exports = grammar({
         "}"
       ),
 
+    dataitem_declaration: ($) =>
+      seq(
+        kw("dataitem"),
+        "(",
+        field("name", choice($.identifier, $.quoted_identifier)),
+        ";",
+        field("source", choice($.identifier, $.quoted_identifier, $.member_access)),
+        ")",
+        "{",
+        repeat(
+          choice(
+            $.property,
+            $.column_declaration,
+            $.trigger_declaration,
+            $.procedure_declaration,
+            $.var_section,
+            $.dataitem_declaration
+          )
+        ),
+        "}"
+      ),
+
+    column_declaration: ($) =>
+      seq(
+        kw("column"),
+        "(",
+        field("name", choice($.identifier, $.quoted_identifier)),
+        ";",
+        field("expression", $._expression),
+        ")",
+        "{",
+        repeat(choice($.property, $.trigger_declaration)),
+        "}"
+      ),
+
+    usercontrol_section: ($) =>
+      seq(
+        kw("usercontrol"),
+        "(",
+        field("name", choice($.identifier, $.quoted_identifier)),
+        ";",
+        field("addin", choice($.identifier, $.quoted_identifier)),
+        ")",
+        "{",
+        repeat(
+          choice(
+            $.property,
+            $.trigger_declaration,
+            $.procedure_declaration,
+            $.var_section
+          )
+        ),
+        "}"
+      ),
+
     // ─── Attributes ─────────────────────────────────────────
 
     attribute: ($) =>
       seq("[", $.identifier, optional(seq("(", $.attribute_arguments, ")")), "]"),
 
     attribute_arguments: ($) =>
-      commaSep1(choice($.string_literal, $.identifier, $.integer_literal)),
+      commaSep1($._expression),
 
     // ─── Procedures & triggers ───────────────────────────────
 
@@ -532,6 +685,16 @@ module.exports = grammar({
         seq(
           field("name", choice($.identifier, $.quoted_identifier)),
           ":",
+          field("type", $._type_reference)
+        )
+      ),
+
+    // Interface signatures support both `: Type` and `ReturnName: Type`.
+    interface_return_type: ($) =>
+      choice(
+        seq(":", field("type", $._type_reference)),
+        seq(
+          field("name", $.named_return_header),
           field("type", $._type_reference)
         )
       ),
@@ -697,12 +860,25 @@ module.exports = grammar({
 
     comparison_expression: ($) =>
       choice(
-        $.additive_expression,
+        $.range_expression,
         prec.left(
           3,
           seq(
-            field("left", $.additive_expression),
+            field("left", $.range_expression),
             field("operator", choice("=", "<>", "<", ">", "<=", ">=", kw("in"))),
+            field("right", $.range_expression)
+          )
+        )
+      ),
+
+    range_expression: ($) =>
+      choice(
+        $.additive_expression,
+        prec.left(
+          4,
+          seq(
+            field("left", $.range_expression),
+            field("operator", ".."),
             field("right", $.additive_expression)
           )
         )
@@ -712,7 +888,7 @@ module.exports = grammar({
       choice(
         $.multiplicative_expression,
         prec.left(
-          4,
+          5,
           seq(
             field("left", $.additive_expression),
             field("operator", choice("+", "-")),
@@ -725,7 +901,7 @@ module.exports = grammar({
       choice(
         $._unary_expression,
         prec.left(
-          5,
+          6,
           seq(
             field("left", $.multiplicative_expression),
             field("operator", choice("*", "/", kw("mod"), kw("div"))),
@@ -742,10 +918,10 @@ module.exports = grammar({
       ),
 
     not_expression: ($) =>
-      prec.right(6, seq(kw("not"), $._unary_expression)),
+      prec.right(7, seq(kw("not"), $._unary_expression)),
 
     negation_expression: ($) =>
-      prec.right(6, seq("-", $._unary_expression)),
+      prec.right(7, seq("-", $._unary_expression)),
 
     _postfix_expression: ($) =>
       choice(
@@ -788,9 +964,11 @@ module.exports = grammar({
       choice(
         $.identifier,
         $.quoted_identifier,
+        $.builtin_object_reference,
         $.string_literal,
         $.integer_literal,
         $.decimal_literal,
+        $.temporal_literal,
         $.boolean_literal,
         $.list_literal,
         $.parenthesized_expression,
@@ -801,6 +979,15 @@ module.exports = grammar({
 
     list_literal: ($) =>
       seq("[", commaSep1($._expression), "]"),
+
+    builtin_object_reference: ($) =>
+      choice(
+        kw("codeunit"),
+        kw("page"),
+        kw("report"),
+        kw("query"),
+        kw("xmlport")
+      ),
 
     parenthesized_expression: ($) => seq("(", $._expression, ")"),
 
@@ -885,8 +1072,8 @@ module.exports = grammar({
 
     _type_reference: ($) =>
       choice(
-        $.simple_type,
         $.sized_type,
+        $.simple_type,
         $.record_type,
         $.codeunit_type,
         $.page_type,
@@ -895,6 +1082,7 @@ module.exports = grammar({
         $.xmlport_type,
         $.enum_type,
         $.interface_type,
+        $.dictionary_type,
         $.list_type,
         $.array_type,
         $.option_type,
@@ -902,15 +1090,35 @@ module.exports = grammar({
         $.dotnet_type
       ),
 
-    simple_type: ($) => choice($.identifier, $.quoted_identifier),
+    // Type references allowed inside generic container declarations such as
+    // `List of [T]` and `Dictionary of [K, V]`. Excludes comma-heavy forms
+    // (`option` and `label`) to avoid ambiguity with generic separators.
+    _generic_type_reference: ($) =>
+      choice(
+        $.sized_type,
+        $.simple_type,
+        $.record_type,
+        $.codeunit_type,
+        $.page_type,
+        $.report_type,
+        $.query_type,
+        $.xmlport_type,
+        $.enum_type,
+        $.interface_type,
+        $.dictionary_type,
+        $.list_type,
+        $.dotnet_type
+      ),
+
+    simple_type: ($) => prec(-1, choice($.identifier, $.quoted_identifier)),
 
     sized_type: ($) =>
-      seq(
+      prec(1, seq(
         field("base", $.identifier),
         "[",
         field("size", $.integer_literal),
         "]"
-      ),
+      )),
 
     record_type: ($) =>
       seq(
@@ -940,8 +1148,19 @@ module.exports = grammar({
     interface_type: ($) =>
       seq(kw("interface"), field("name", choice($.identifier, $.quoted_identifier))),
 
+    dictionary_type: ($) =>
+      seq(
+        kw("dictionary"),
+        kw("of"),
+        "[",
+        field("key_type", $._generic_type_reference),
+        ",",
+        field("value_type", $._generic_type_reference),
+        "]"
+      ),
+
     list_type: ($) =>
-      seq(kw("list"), kw("of"), "[", $._type_reference, "]"),
+      seq(kw("list"), kw("of"), "[", field("element_type", $._generic_type_reference), "]"),
 
     array_type: ($) =>
       seq(
@@ -977,6 +1196,7 @@ module.exports = grammar({
           $.string_literal,
           $.integer_literal,
           $.decimal_literal,
+          $.temporal_literal,
           $.boolean_literal,
           $.identifier,
           $.quoted_identifier
@@ -992,12 +1212,19 @@ module.exports = grammar({
 
     quoted_identifier: ($) => /"[^"]*"/,
 
+    // Used in interface method signatures with named return values:
+    // `procedure Foo() ReturnVar: Code[20]`
+    named_return_header: ($) => token(/[a-zA-Z_][a-zA-Z0-9_]*\s*:/),
+
     // AL strings escape single quote as doubled single quote: ''.
     string_literal: ($) => /'([^']|'')*'/,
 
     integer_literal: ($) => /\d+/,
 
     decimal_literal: ($) => /\d+\.\d+/,
+
+    // AL temporal constants such as 0D, 0T, 0DT.
+    temporal_literal: ($) => token(prec(2, /\d+([dD][tT]|[dD]|[tT])/)),
 
     // Use token(prec()) to ensure these win over identifier at the lexer level
     boolean_literal: ($) => token(prec(1, choice(

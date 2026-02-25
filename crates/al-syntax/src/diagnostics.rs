@@ -100,6 +100,40 @@ mod tests {
     }
 
     #[test]
+    fn test_no_errors_for_interface_methods_without_semicolons() {
+        let source = r#"interface "Demo IFunctions"
+{
+    Access = Internal;
+
+    procedure ReadLocalVar(var LastSlipNo: Code[20])
+    procedure WriteLocalVar(LastSlipNo: Code[20])
+    procedure RetrieveSusp(SlipNumber: Code[20]; var ErrorText: Text): Boolean
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for interface methods without semicolons, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn test_no_errors_for_interface_named_return_without_semicolon() {
+        let source = r#"interface "Demo IFunctions"
+{
+    procedure InsertTmpTrans(var LastSlipNo: Code[20]; ShiftNo: Code[1]; SetSalesType: Code[20]; TableNo: Integer; TrainingActive: Boolean; TableDescr: Text) NewSlipNo: Code[20]
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for interface named return without semicolon, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
     fn test_no_errors_for_incomplete_qualified_enum_value() {
         let source = r#"codeunit 50100 Test
 {
@@ -178,9 +212,9 @@ codeunit 50100 Test
 {
     var
         [Obsolete('This variable is not used in Compressed lines mode.')]
-        SelectionBuffer: Record "LSC Posted Customer Order Line" temporary;
+        SelectionBuffer: Record "Posted Customer Order Line" temporary;
         [Obsolete('This variable is not used in Compressed lines mode.')]
-        GuiLineBuffer: Record "LSC Posted Customer Order Line" temporary;
+        GuiLineBuffer: Record "Posted Customer Order Line" temporary;
 }"#;
         let tree = al_parser::parse(source).unwrap();
         let diags = extract_diagnostics(&tree, source);
@@ -198,7 +232,7 @@ codeunit 50100 Test
     fields
     {
         #pragma warning disable AL0432
-        field(9; Status; Enum "LSC CO Line Status")
+        field(9; Status; Enum "CO Line Status")
         {
         }
         #pragma warning restore AL0432
@@ -249,6 +283,26 @@ codeunit 50100 Test
     }
 
     #[test]
+    fn test_no_errors_for_dictionary_and_list_primitives() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        dict: Dictionary of [Text, Text];
+        userGeneratedTags: List of [Text];
+    begin
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for Dictionary/List primitives, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
     fn test_no_errors_for_enum_prefix_qualified_value() {
         let source = r#"codeunit 50100 Test
 {
@@ -256,7 +310,7 @@ codeunit 50100 Test
     var
         X: Integer;
     begin
-        X := Enum::"LSC POS Trans. Numpad Trigger"::TenderKeyPressedEx;
+        X := Enum::"Trans. Numpad Trigger"::TenderKeyPressedEx;
     end;
 }"#;
         let tree = al_parser::parse(source).unwrap();
@@ -264,6 +318,32 @@ codeunit 50100 Test
         assert!(
             diags.is_empty(),
             "expected no errors for Enum::<name>::<value>, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn test_no_errors_for_event_publisher_and_subscriber_attributes() {
+        let source = r#"codeunit 50100 "My Publisher"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnAfterPost()
+    begin
+    end;
+}
+
+codeunit 50101 "My Subscriber"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"My Publisher", 'OnAfterPost', '', false, false)]
+    local procedure HandleOnAfterPost()
+    begin
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for EventSubscriber/IntegrationEvent attributes, got: {:?}",
             diags
         );
     }
@@ -292,7 +372,7 @@ codeunit 50100 Test
             Caption = 'Codeunit Name';
             Editable = false;
             FieldClass = FlowField;
-            ToolTip = 'Specifies the description of the codeunit that executes the POS command.';
+            ToolTip = 'Specifies the description of the codeunit that executes the command.';
         }
     }
 }"#;
@@ -301,6 +381,35 @@ codeunit 50100 Test
         assert!(
             diags.is_empty(),
             "expected no errors for TableRelation/CalcFormula properties, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn test_no_errors_for_tablerelation_if_else_expression() {
+        let source = r#"table 50100 "Dummy Config"
+{
+    fields
+    {
+        field(1; "Restaurant No."; Code[20])
+        {
+        }
+        field(2; "Target Restaurant"; Code[20])
+        {
+        }
+        field(3; "Dining Area Id"; Integer)
+        {
+            TableRelation = IF ("Target Restaurant" = FILTER('')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Restaurant No."))
+                            ELSE
+                            IF ("Target Restaurant" = FILTER(<> '')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Target Restaurant"));
+        }
+    }
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for TableRelation IF/ELSE expression, got: {:?}",
             diags
         );
     }
@@ -325,9 +434,9 @@ codeunit 50100 Test
     fn test_no_errors_for_procedure_semicolon_before_begin() {
         let source = r#"codeunit 50100 Test
 {
-    local procedure PosFunc(): Interface "LSC IFunctions";
+    local procedure HelperFunc(): Interface "Demo IFunctions";
     begin
-        exit(ServiceLocator.POSFunctions());
+        exit(ServiceLocator.CoreFunctions());
     end;
 }"#;
         let tree = al_parser::parse(source).unwrap();
@@ -347,7 +456,7 @@ codeunit 50100 Test
     var
         FunctionSetup2: Record "Function Setup";
     begin
-        if FunctionSetup2."Run Codeunit" in [Codeunit::"LSC Pop-up POS Commands", Codeunit::"LSC Popup Controller"] then begin
+        if FunctionSetup2."Run Codeunit" in [Codeunit::"Pop-up Commands", Codeunit::"Popup Controller"] then begin
         end;
     end;
 }"#;
@@ -361,10 +470,53 @@ codeunit 50100 Test
     }
 
     #[test]
+    fn test_no_errors_for_in_operator_with_interval_range() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        OfferValidFromDate: Date;
+        OfferValidToDate: Date;
+    begin
+        if (Today in [OfferValidFromDate .. OfferValidToDate]) then begin
+        end;
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for `in` with interval range, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn test_no_errors_for_codeunit_run_invocation() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        FunctionSetup2: Record "Function Setup";
+        MenuLine2_l: Record "Menu Line";
+    begin
+        CODEUNIT.Run(FunctionSetup2."Run Codeunit", MenuLine2_l);
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for CODEUNIT.Run invocation, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
     fn test_no_errors_for_named_return_value() {
         let source = r#"codeunit 50100 Test
 {
-    procedure GetFunctionModeEnum() FunctionModeEnum: Enum "LSC POS Command";
+    procedure GetFunctionModeEnum() FunctionModeEnum: Enum "Command Enum";
     begin
         exit(FunctionSetup.CommandToEnum(GetFunctionMode));
     end;
@@ -387,7 +539,7 @@ codeunit 50100 Test
         UsePaymentToken: Boolean;
         PaymentAbsValue: Decimal;
     begin
-        PosTransactionGui.OpenNumericKeyboard(AmountMsg, Formatting.FormatAmountToShow(PaymentAbsValue), UsePaymentToken ? Enum::"LSC POS Trans. Numpad Trigger"::CardOnFilePressed : Enum::"LSC POS Trans. Numpad Trigger"::TenderKeyPressedEx);
+        UiDialog.OpenNumericKeyboard(AmountMsg, Formatting.FormatAmountToShow(PaymentAbsValue), UsePaymentToken ? Enum::"Trans. Numpad Trigger"::CardOnFilePressed : Enum::"Trans. Numpad Trigger"::TenderKeyPressedEx);
     end;
 }"#;
         let tree = al_parser::parse(source).unwrap();
@@ -395,6 +547,112 @@ codeunit 50100 Test
         assert!(
             diags.is_empty(),
             "expected no errors for ternary enum-qualified expression, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn test_no_errors_for_temporal_literals() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        LineRec: Record "Sales Line";
+        D: Date;
+        T: Time;
+        DT: DateTime;
+    begin
+        if (LineRec."Customer Order Line") and (LineRec."Trans. Time" = 0T) then begin
+        end;
+        D := 0D;
+        T := 0T;
+        DT := 0DT;
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for temporal literals, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn test_no_errors_for_page_usercontrol_scanner_dialog() {
+        let source = r#"page 99008876 "Scanner Dialog"
+{
+    ApplicationArea = All;
+    Caption = 'Barcode scanning';
+    Editable = false;
+    PageType = Document;
+    SourceTable = "Scanner";
+
+    layout
+    {
+        area(content)
+        {
+            usercontrol(control; "DialogHost")
+            {
+                trigger AddInReady(data: Text)
+                begin
+                    CurrPage.control.SendRequestToAddInEx('SCANNER:SCANDATA', '', '');
+                end;
+            }
+        }
+    }
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for page usercontrol scanner dialog, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn test_no_errors_for_report_with_nested_dataitems_requestpage_and_labels() {
+        let source = r#"report 10000712 "Stores In Location Profile"
+{
+    DefaultLayout = RDLC;
+    RDLCLayout = 'src/MicrosoftExtension/Layouts/Stores In Location Profile.rdlc';
+
+    dataset
+    {
+        dataitem(Store; "Store")
+        {
+            DataItemTableView = SORTING("No.") ORDER(Ascending);
+            PrintOnlyIfDetail = true;
+            column(Name; Store.Name)
+            {
+            }
+            dataitem("Inventory Lookup Table"; "Inventory Lookup Table")
+            {
+                DataItemLink = "Store No." = FIELD("No.");
+                column(ItemNo_Test; "Inventory Lookup Table"."Item No.")
+                {
+                }
+            }
+        }
+    }
+
+    requestpage
+    {
+        layout
+        {
+        }
+    }
+
+    labels
+    {
+    }
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for report with nested dataitems/requestpage/labels, got: {:?}",
             diags
         );
     }

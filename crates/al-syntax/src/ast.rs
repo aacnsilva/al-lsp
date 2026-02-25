@@ -124,12 +124,19 @@ pub fn extract_name(node: Node, source: &str) -> String {
 /// Object declarations have the name as the first identifier or quoted_identifier child
 /// (after the integer_literal for the object ID).
 /// Returns (name, name_start_point, name_end_point).
-fn find_object_name(node: Node, source: &str) -> Option<(String, tree_sitter::Point, tree_sitter::Point)> {
+fn find_object_name(
+    node: Node,
+    source: &str,
+) -> Option<(String, tree_sitter::Point, tree_sitter::Point)> {
     for i in 0..node.named_child_count() {
         if let Some(child) = node.named_child(i) {
             match child.kind() {
                 "identifier" | "quoted_identifier" => {
-                    return Some((extract_name(child, source), child.start_position(), child.end_position()));
+                    return Some((
+                        extract_name(child, source),
+                        child.start_position(),
+                        child.end_position(),
+                    ));
                 }
                 _ => continue,
             }
@@ -563,7 +570,7 @@ mod tests {
     fn test_extract_named_return_value_as_local_variable() {
         let source = r#"codeunit 50100 Test
 {
-    procedure GetFunctionModeEnum() FunctionModeEnum: Enum "LSC POS Command";
+    procedure GetFunctionModeEnum() FunctionModeEnum: Enum "Command Enum";
     begin
         exit(FunctionSetup.CommandToEnum(GetFunctionMode));
     end;
@@ -581,7 +588,7 @@ mod tests {
             .find(|c| matches!(c.kind, AlSymbolKind::Procedure) && c.name == "GetFunctionModeEnum")
             .expect("procedure symbol");
 
-        assert_eq!(proc.type_info.as_deref(), Some("Enum \"LSC POS Command\""));
+        assert_eq!(proc.type_info.as_deref(), Some("Enum \"Command Enum\""));
         assert!(
             proc.children
                 .iter()
@@ -629,7 +636,7 @@ mod tests {
 {
     procedure DoWork()
     var
-        LineRec, NewLine: Record "LSC POS Trans. Line";
+        LineRec, NewLine: Record "Demo Trans. Line";
         X: Integer;
     begin
     end;
@@ -653,12 +660,12 @@ mod tests {
         assert_eq!(proc.children[0].name, "LineRec");
         assert_eq!(
             proc.children[0].type_info.as_deref(),
-            Some("Record \"LSC POS Trans. Line\"")
+            Some("Record \"Demo Trans. Line\"")
         );
         assert_eq!(proc.children[1].name, "NewLine");
         assert_eq!(
             proc.children[1].type_info.as_deref(),
-            Some("Record \"LSC POS Trans. Line\"")
+            Some("Record \"Demo Trans. Line\"")
         );
         assert_eq!(proc.children[2].name, "X");
         assert_eq!(proc.children[2].type_info.as_deref(), Some("Integer"));

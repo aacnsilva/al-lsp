@@ -28,8 +28,7 @@ pub fn handle_code_action(
 
     // Extract procedure (only when there's a non-empty selection)
     if range.start != range.end {
-        if let Some(action) = extract_procedure_action(&doc.tree, &source, &doc.rope, &uri, range)
-        {
+        if let Some(action) = extract_procedure_action(&doc.tree, &source, &doc.rope, &uri, range) {
             actions.push(CodeActionOrCommand::CodeAction(action));
         }
     }
@@ -42,10 +41,7 @@ pub fn handle_code_action(
 }
 
 /// Walk up from a node to find the nearest ancestor of the given kind.
-fn find_ancestor<'a>(
-    node: tree_sitter::Node<'a>,
-    kind: &str,
-) -> Option<tree_sitter::Node<'a>> {
+fn find_ancestor<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
     let mut current = node;
     loop {
         if current.kind() == kind {
@@ -58,7 +54,10 @@ fn find_ancestor<'a>(
 /// Detect the access modifier (local/internal/protected) before "procedure" keyword
 /// by examining the source text of the procedure node.
 /// Returns the modifier text and its byte range (start, end) if found.
-fn detect_access_modifier(source: &str, proc_node: tree_sitter::Node) -> Option<(String, usize, usize)> {
+fn detect_access_modifier(
+    source: &str,
+    proc_node: tree_sitter::Node,
+) -> Option<(String, usize, usize)> {
     let proc_text = &source[proc_node.start_byte()..proc_node.end_byte()];
     let proc_lower = proc_text.to_lowercase();
 
@@ -102,40 +101,45 @@ fn toggle_visibility_action(
     // Find enclosing procedure_declaration
     let proc_node = find_ancestor(node, "procedure_declaration")?;
 
-    let (title, edit) = if let Some((modifier, mod_start, mod_end)) =
-        detect_access_modifier(source, proc_node)
-    {
-        // Has an access modifier — offer to remove it
-        let title = format!("Remove '{}' modifier", modifier);
+    let (title, edit) =
+        if let Some((modifier, mod_start, mod_end)) = detect_access_modifier(source, proc_node) {
+            // Has an access modifier — offer to remove it
+            let title = format!("Remove '{}' modifier", modifier);
 
-        // Convert byte positions to tree_sitter::Point using rope
-        let start_line = rope.byte_to_line(mod_start);
-        let start_col = mod_start - rope.line_to_byte(start_line);
-        let end_line = rope.byte_to_line(mod_end);
-        let end_col = mod_end - rope.line_to_byte(end_line);
+            // Convert byte positions to tree_sitter::Point using rope
+            let start_line = rope.byte_to_line(mod_start);
+            let start_col = mod_start - rope.line_to_byte(start_line);
+            let end_line = rope.byte_to_line(mod_end);
+            let end_col = mod_end - rope.line_to_byte(end_line);
 
-        let start_point = tree_sitter::Point { row: start_line, column: start_col };
-        let end_point = tree_sitter::Point { row: end_line, column: end_col };
+            let start_point = tree_sitter::Point {
+                row: start_line,
+                column: start_col,
+            };
+            let end_point = tree_sitter::Point {
+                row: end_line,
+                column: end_col,
+            };
 
-        let text_edit = TextEdit {
-            range: crate::convert::ts_range_to_lsp_range(start_point, end_point),
-            new_text: String::new(),
+            let text_edit = TextEdit {
+                range: crate::convert::ts_range_to_lsp_range(start_point, end_point),
+                new_text: String::new(),
+            };
+            (title, text_edit)
+        } else {
+            // No access modifier — offer to add 'local'
+            let title = "Add 'local' modifier".to_string();
+
+            // Insert "local " before the procedure node start
+            let proc_start = proc_node.start_position();
+            let insert_pos = crate::convert::ts_range_to_lsp_range(proc_start, proc_start);
+
+            let text_edit = TextEdit {
+                range: insert_pos,
+                new_text: "local ".to_string(),
+            };
+            (title, text_edit)
         };
-        (title, text_edit)
-    } else {
-        // No access modifier — offer to add 'local'
-        let title = "Add 'local' modifier".to_string();
-
-        // Insert "local " before the procedure node start
-        let proc_start = proc_node.start_position();
-        let insert_pos = crate::convert::ts_range_to_lsp_range(proc_start, proc_start);
-
-        let text_edit = TextEdit {
-            range: insert_pos,
-            new_text: "local ".to_string(),
-        };
-        (title, text_edit)
-    };
 
     let mut changes = HashMap::new();
     changes.insert(uri.clone(), vec![edit]);
@@ -185,7 +189,10 @@ fn extract_procedure_action(
     let mut cursor = body.walk();
     for child in body.named_children(&mut cursor) {
         // A statement is any named child of the block (except begin/end keywords)
-        if child.kind().ends_with("_statement") || child.kind() == "function_call" || child.kind() == "method_call" {
+        if child.kind().ends_with("_statement")
+            || child.kind() == "function_call"
+            || child.kind() == "method_call"
+        {
             if child.start_byte() >= start_offset && child.end_byte() <= end_offset {
                 selected_statements.push(child);
             }
@@ -234,18 +241,15 @@ fn extract_procedure_action(
     let proc_indent = &source[proc_line_start..proc_node.start_byte()];
 
     // Re-indent extracted text relative to the new procedure body
-    let stmt_indent = &source[rope.line_to_byte(first_stmt.start_position().row)..first_stmt.start_byte()];
+    let stmt_indent =
+        &source[rope.line_to_byte(first_stmt.start_position().row)..first_stmt.start_byte()];
     let new_body_indent = format!("{}    ", proc_indent);
     let reindented = reindent(extracted_text, stmt_indent, &new_body_indent);
 
     // Build the new procedure text
     let new_proc = format!(
         "\n\n{}local procedure ExtractedProcedure({})\n{}begin\n{}\n{}end;",
-        proc_indent,
-        params_str,
-        proc_indent,
-        reindented,
-        proc_indent,
+        proc_indent, params_str, proc_indent, reindented, proc_indent,
     );
 
     // Build the call replacement
@@ -388,8 +392,8 @@ fn reindent(text: &str, old_indent: &str, new_indent: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use al_syntax::document::DocumentState;
     use crate::state::WorldState;
+    use al_syntax::document::DocumentState;
     use lsp_types::{
         CodeActionContext, CodeActionParams, Position, Range, TextDocumentIdentifier, Url,
     };
@@ -437,12 +441,10 @@ mod tests {
 
         assert!(result.is_some(), "expected code actions");
         let actions = result.unwrap();
-        let toggle = actions
-            .iter()
-            .find(|a| match a {
-                CodeActionOrCommand::CodeAction(ca) => ca.title.contains("local"),
-                _ => false,
-            });
+        let toggle = actions.iter().find(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => ca.title.contains("local"),
+            _ => false,
+        });
         assert!(toggle.is_some(), "expected 'Add local modifier' action");
 
         if let CodeActionOrCommand::CodeAction(ca) = toggle.unwrap() {
@@ -473,17 +475,20 @@ mod tests {
 
         assert!(result.is_some(), "expected code actions");
         let actions = result.unwrap();
-        let toggle = actions
-            .iter()
-            .find(|a| match a {
-                CodeActionOrCommand::CodeAction(ca) => ca.title.contains("Remove"),
-                _ => false,
-            });
-        assert!(toggle.is_some(), "expected 'Remove local modifier' action, got: {:?}",
-            actions.iter().map(|a| match a {
-                CodeActionOrCommand::CodeAction(ca) => ca.title.clone(),
-                _ => "command".to_string(),
-            }).collect::<Vec<_>>()
+        let toggle = actions.iter().find(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => ca.title.contains("Remove"),
+            _ => false,
+        });
+        assert!(
+            toggle.is_some(),
+            "expected 'Remove local modifier' action, got: {:?}",
+            actions
+                .iter()
+                .map(|a| match a {
+                    CodeActionOrCommand::CodeAction(ca) => ca.title.clone(),
+                    _ => "command".to_string(),
+                })
+                .collect::<Vec<_>>()
         );
 
         if let CodeActionOrCommand::CodeAction(ca) = toggle.unwrap() {
@@ -514,13 +519,14 @@ mod tests {
 
         assert!(result.is_some(), "expected code actions");
         let actions = result.unwrap();
-        let toggle = actions
-            .iter()
-            .find(|a| match a {
-                CodeActionOrCommand::CodeAction(ca) => ca.title.contains("internal"),
-                _ => false,
-            });
-        assert!(toggle.is_some(), "expected 'Remove internal modifier' action");
+        let toggle = actions.iter().find(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => ca.title.contains("internal"),
+            _ => false,
+        });
+        assert!(
+            toggle.is_some(),
+            "expected 'Remove internal modifier' action"
+        );
     }
 
     #[test]
@@ -548,7 +554,10 @@ mod tests {
                 }
                 _ => false,
             });
-            assert!(!has_toggle, "should not offer toggle visibility outside a procedure");
+            assert!(
+                !has_toggle,
+                "should not offer toggle visibility outside a procedure"
+            );
         }
     }
 
@@ -579,17 +588,20 @@ mod tests {
 
         assert!(result.is_some(), "expected code actions for selection");
         let actions = result.unwrap();
-        let extract = actions
-            .iter()
-            .find(|a| match a {
-                CodeActionOrCommand::CodeAction(ca) => ca.title == "Extract procedure",
-                _ => false,
-            });
-        assert!(extract.is_some(), "expected 'Extract procedure' action, got: {:?}",
-            actions.iter().map(|a| match a {
-                CodeActionOrCommand::CodeAction(ca) => ca.title.clone(),
-                _ => "command".to_string(),
-            }).collect::<Vec<_>>()
+        let extract = actions.iter().find(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => ca.title == "Extract procedure",
+            _ => false,
+        });
+        assert!(
+            extract.is_some(),
+            "expected 'Extract procedure' action, got: {:?}",
+            actions
+                .iter()
+                .map(|a| match a {
+                    CodeActionOrCommand::CodeAction(ca) => ca.title.clone(),
+                    _ => "command".to_string(),
+                })
+                .collect::<Vec<_>>()
         );
 
         if let CodeActionOrCommand::CodeAction(ca) = extract.unwrap() {
@@ -601,7 +613,9 @@ mod tests {
             assert!(edits[0].new_text.contains("ExtractedProcedure("));
 
             // Second edit inserts the new procedure
-            assert!(edits[1].new_text.contains("local procedure ExtractedProcedure"));
+            assert!(edits[1]
+                .new_text
+                .contains("local procedure ExtractedProcedure"));
             assert!(edits[1].new_text.contains("begin"));
             assert!(edits[1].new_text.contains("end;"));
         }

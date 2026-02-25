@@ -5,8 +5,11 @@ use al_syntax::navigation::{
     extract_type_object_name, identifier_context_at_offset, resolve_at_offset,
 };
 
-use crate::handlers::completion::enum_value_target_at_offset;
 use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
+use crate::handlers::completion::{enum_value_target_at_offset, member_access_target_at_offset};
+use crate::handlers::events::{
+    event_invocation_target_at_offset, event_subscriber_context_at_offset, find_event_publishers,
+};
 use crate::state::WorldState;
 
 fn to_definition_response(locations: Vec<Location>) -> Option<GotoDefinitionResponse> {
@@ -68,6 +71,42 @@ fn find_enum_value_declarations(
                         range: ts_range_to_lsp_range(child.start_point, child.end_point),
                     });
                 }
+            }
+        }
+    }
+    locations
+}
+
+fn find_object_member_declarations(
+    state: &WorldState,
+    object_kind: &str,
+    object_name: &str,
+    member_name: &str,
+    is_method_call: bool,
+) -> Vec<Location> {
+    let mut locations = Vec::new();
+    for entry in state.documents.iter() {
+        for symbol in &entry.value().symbol_table.symbols {
+            let AlSymbolKind::Object(kind) = symbol.kind else {
+                continue;
+            };
+            if !kind.label().eq_ignore_ascii_case(object_kind)
+                || !symbol.name.eq_ignore_ascii_case(object_name)
+            {
+                continue;
+            }
+
+            for child in &symbol.children {
+                if !child.name.eq_ignore_ascii_case(member_name) {
+                    continue;
+                }
+                if is_method_call && !matches!(child.kind, AlSymbolKind::Procedure) {
+                    continue;
+                }
+                locations.push(Location {
+                    uri: entry.key().clone(),
+                    range: ts_range_to_lsp_range(child.start_point, child.end_point),
+                });
             }
         }
     }
@@ -140,6 +179,98 @@ pub fn handle_goto_definition(
         if let Some(resp) =
             to_definition_response(find_enum_value_declarations(state, &enum_name, &value_name))
         {
+            return Some(resp);
+        }
+        let doc = state.documents.get(&uri)?;
+        let source = doc.source();
+        let resolved = resolve_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)?;
+        let range = ts_range_to_lsp_range(resolved.symbol.start_point, resolved.symbol.end_point);
+        return Some(GotoDefinitionResponse::Scalar(Location {
+            uri: uri.clone(),
+            range,
+        }));
+    }
+
+    if let Some(event_ctx) = event_subscriber_context_at_offset(&doc.tree, &source, byte_offset) {
+        if event_ctx.arg_index == 1 {
+            if let Some((object_kind, object_name)) = event_ctx.object_ref {
+                drop(doc);
+                if let Some(resp) = to_definition_response(find_object_declarations(
+                    state,
+                    &object_kind,
+                    &object_name,
+                )) {
+                    return Some(resp);
+                }
+                let doc = state.documents.get(&uri)?;
+                let source = doc.source();
+                let resolved =
+                    resolve_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)?;
+                let range =
+                    ts_range_to_lsp_range(resolved.symbol.start_point, resolved.symbol.end_point);
+                return Some(GotoDefinitionResponse::Scalar(Location {
+                    uri: uri.clone(),
+                    range,
+                }));
+            }
+        }
+
+        if event_ctx.arg_index >= 2 {
+            if let Some(target) = event_ctx.target {
+                drop(doc);
+                let locations: Vec<Location> = find_event_publishers(state, &target)
+                    .into_iter()
+                    .map(|publisher| Location {
+                        uri: publisher.uri,
+                        range: ts_range_to_lsp_range(publisher.name_start, publisher.name_end),
+                    })
+                    .collect();
+                if let Some(resp) = to_definition_response(locations) {
+                    return Some(resp);
+                }
+                let doc = state.documents.get(&uri)?;
+                let source = doc.source();
+                let resolved =
+                    resolve_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)?;
+                let range =
+                    ts_range_to_lsp_range(resolved.symbol.start_point, resolved.symbol.end_point);
+                return Some(GotoDefinitionResponse::Scalar(Location {
+                    uri: uri.clone(),
+                    range,
+                }));
+            }
+        }
+    }
+
+    let invocation_target =
+        event_invocation_target_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset);
+    let doc = if let Some(target) = invocation_target {
+        drop(doc);
+        let locations: Vec<Location> = find_event_publishers(state, &target)
+            .into_iter()
+            .map(|publisher| Location {
+                uri: publisher.uri,
+                range: ts_range_to_lsp_range(publisher.name_start, publisher.name_end),
+            })
+            .collect();
+        if let Some(resp) = to_definition_response(locations) {
+            return Some(resp);
+        }
+        state.documents.get(&uri)?
+    } else {
+        doc
+    };
+    let source = doc.source();
+
+    if let Some(target) = member_access_target_at_offset(state, &doc, &source, byte_offset) {
+        drop(doc);
+        if let Some(resp) = to_definition_response(find_object_member_declarations(
+            state,
+            &target.object_kind,
+            &target.object_name,
+            &target.member_name,
+            target.is_method_call,
+        )) {
             return Some(resp);
         }
         let doc = state.documents.get(&uri)?;
@@ -300,6 +431,16 @@ mod tests {
         }
     }
 
+    fn cursor_on(source: &str, marker: &str) -> (u32, u32) {
+        let idx = source
+            .find(marker)
+            .unwrap_or_else(|| panic!("marker not found: {marker}"));
+        let line = source[..idx].bytes().filter(|&b| b == b'\n').count() as u32;
+        let line_start = source[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let character = (idx - line_start) as u32;
+        (line, character)
+    }
+
     #[test]
     fn test_goto_definition_impl_procedure_to_interface_method_cross_doc() {
         // Cursor on GetAddress in a codeunit that implements IAddressProvider.
@@ -453,6 +594,85 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
     }
 
     #[test]
+    fn test_goto_definition_member_on_procedure_return_interface() {
+        let source = r#"interface "Demo IFunctions"
+{
+    procedure NumberPad(KeyText: Text; KeyValue: Integer);
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        HelperFunc.NumberPad('9', 9);
+    end;
+
+    local procedure HelperFunc(): Interface "Demo IFunctions";
+    begin
+        exit(ServiceLocator.CoreFunctions());
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        // Cursor on NumberPad in HelperFunc.NumberPad(...)
+        let (line, character) = cursor_on(source, "NumberPad('9', 9)");
+        let params = make_goto_params(uri.clone(), line, character);
+        let result = handle_goto_definition(&state, params);
+        assert!(
+            result.is_some(),
+            "expected goto-definition to resolve interface method"
+        );
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter().any(|l| l.range.start.line == 2),
+            "expected navigation to interface method declaration, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_member_on_procedure_call_return_interface() {
+        let source = r#"interface "Demo IFunctions"
+{
+    procedure NumberPad(KeyText: Text; KeyValue: Integer);
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        HelperFunc().NumberPad('9', 9);
+    end;
+
+    local procedure HelperFunc(): Interface "Demo IFunctions";
+    begin
+        exit(ServiceLocator.CoreFunctions());
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "NumberPad('9', 9)");
+        let params = make_goto_params(uri, line, character);
+        let result = handle_goto_definition(&state, params);
+        assert!(
+            result.is_some(),
+            "expected goto-definition to resolve interface method"
+        );
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter().any(|l| l.range.start.line == 2),
+            "expected navigation to interface method declaration, got: {locs:?}"
+        );
+    }
+
+    #[test]
     fn test_goto_definition_on_type_name_in_record_declaration() {
         let table_source = r#"table 18 Customer
 {
@@ -584,8 +804,86 @@ codeunit 50100 Test
         );
         let locs = locations_from(result.unwrap());
         assert!(
-            locs.iter().any(|l| l.uri == enum_uri && l.range.start.line == 2),
+            locs.iter()
+                .any(|l| l.uri == enum_uri && l.range.start.line == 2),
             "expected navigation to enum value declaration in enum document, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_event_subscriber_event_name_to_publisher() {
+        let publisher_source = r#"codeunit 50100 "My Publisher"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnAfterPost()
+    begin
+    end;
+}"#;
+        let subscriber_source = r#"codeunit 50101 "My Subscriber"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"My Publisher", 'OnAfterPost', '', false, false)]
+    local procedure HandleOnAfterPost()
+    begin
+    end;
+}"#;
+        let publisher_uri = Url::parse("file:///test/publisher.al").unwrap();
+        let subscriber_uri = Url::parse("file:///test/subscriber.al").unwrap();
+        let state = WorldState::new();
+        state.documents.insert(
+            publisher_uri.clone(),
+            DocumentState::new(publisher_source).unwrap(),
+        );
+        state.documents.insert(
+            subscriber_uri.clone(),
+            DocumentState::new(subscriber_source).unwrap(),
+        );
+
+        let (line, character) = cursor_on(subscriber_source, "OnAfterPost");
+        let params = make_goto_params(subscriber_uri, line, character);
+        let result = handle_goto_definition(&state, params);
+        assert!(
+            result.is_some(),
+            "expected goto-definition to resolve event publisher"
+        );
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter()
+                .any(|l| l.uri == publisher_uri && l.range.start.line == 3),
+            "expected navigation to publisher procedure declaration, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_event_invocation_to_publisher_declaration() {
+        let source = r#"codeunit 50100 "My Publisher"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnAfterPost()
+    begin
+    end;
+
+    procedure Raise()
+    begin
+        OnAfterPost();
+    end;
+}"#;
+        let uri = Url::parse("file:///test/publisher.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "OnAfterPost();");
+        let params = make_goto_params(uri, line, character);
+        let result = handle_goto_definition(&state, params);
+        assert!(
+            result.is_some(),
+            "expected goto-definition from invocation to resolve event declaration"
+        );
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter().any(|l| l.range.start.line == 3),
+            "expected navigation to event declaration on line 3, got: {locs:?}"
         );
     }
 }

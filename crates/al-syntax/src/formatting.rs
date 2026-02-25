@@ -262,32 +262,41 @@ fn assign_indentation(
     // Children: condition expression, consequence block, [alternative block]
     if kind == "if_statement" {
         set_line_indent(levels, start_line, depth);
-        let mut first_block_end: Option<usize> = None;
+        let consequence_id = node.child_by_field_name("consequence").map(|n| n.id());
+        let alternative_id = node.child_by_field_name("alternative").map(|n| n.id());
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             let child_kind = child.kind();
-            if child_kind == "block" {
-                if let Some(_) = first_block_end {
-                    // This is the alternative (else) block.
-                    // The `else` keyword is on a line between the first block's end
-                    // and this block's start. Set it at the if-statement's depth.
-                    let alt_start = child.start_position().row;
-                    if alt_start > 0 {
-                        for else_line in (0..alt_start).rev() {
-                            let line_text = source.lines().nth(else_line).unwrap_or("");
-                            let trimmed = line_text.trim().to_lowercase();
-                            if trimmed.starts_with("else") {
-                                set_line_indent(levels, else_line, depth);
-                                break;
-                            }
-                            if !trimmed.is_empty() {
-                                break;
-                            }
+            let is_consequence = consequence_id.is_some_and(|id| id == child.id());
+            let is_alternative = alternative_id.is_some_and(|id| id == child.id());
+
+            if is_alternative {
+                // The `else` keyword is implicit and appears before the alternative node.
+                let alt_start = child.start_position().row;
+                let alt_line = source.lines().nth(alt_start).unwrap_or("");
+                if alt_line.trim().to_lowercase().starts_with("else") {
+                    set_line_indent(levels, alt_start, depth);
+                } else if alt_start > 0 {
+                    for else_line in (0..alt_start).rev() {
+                        let line_text = source.lines().nth(else_line).unwrap_or("");
+                        let trimmed = line_text.trim().to_lowercase();
+                        if trimmed.starts_with("else") {
+                            set_line_indent(levels, else_line, depth);
+                            break;
+                        }
+                        if !trimmed.is_empty() {
+                            break;
                         }
                     }
                 }
-                first_block_end = Some(child.end_position().row);
-                // consequence/alternative blocks indented
+            }
+
+            if child_kind == "block" && (is_consequence || is_alternative) {
+                // For `if/else ... begin ... end`, keep `begin/end` aligned with `if/else`
+                // and indent only the statements inside the block by one level.
+                assign_indentation(child, source, levels, join_to_prev, remove_line, depth);
+            } else if is_consequence || is_alternative {
+                // Single-statement consequence/alternative should still be indented.
                 assign_indentation(child, source, levels, join_to_prev, remove_line, depth + 1);
             } else {
                 assign_indentation(child, source, levels, join_to_prev, remove_line, depth);
@@ -659,13 +668,13 @@ end;
     procedure DoWork()
     begin
         if x > 0 then
-            begin
-                y := 1;
-            end
+        begin
+            y := 1;
+        end
         else
-            begin
-                y := 2;
-            end;
+        begin
+            y := 2;
+        end;
     end;
 }
 "#;
@@ -946,5 +955,44 @@ end;
             result.contains("X /= 4;"),
             "expected spaces around /=, got:\n{result}"
         );
+    }
+
+    #[test]
+    fn test_if_then_single_statement_else_block_indentation() {
+        let input = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        lMinInventory: Decimal;
+    begin
+        if lProductGroupRec."Min Loc. Prof. Inventory" > 0 then
+        lMinInventory := lProductGroupRec."Min Loc. Prof. Inventory"
+            else begin
+                lStoreLocationProfilesRec.Reset;
+                lStoreLocationProfilesRec.SetRange(ProfileID, lStore."Location Profile");
+                lStoreLocationProfilesRec.FindFirst;
+                lMinInventory := lStoreLocationProfilesRec."Min Inventory";
+            end;
+    end;
+}"#;
+        let result = format(input);
+        let expected = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        lMinInventory: Decimal;
+    begin
+        if lProductGroupRec."Min Loc. Prof. Inventory" > 0 then
+            lMinInventory := lProductGroupRec."Min Loc. Prof. Inventory"
+        else begin
+            lStoreLocationProfilesRec.Reset;
+            lStoreLocationProfilesRec.SetRange(ProfileID, lStore."Location Profile");
+            lStoreLocationProfilesRec.FindFirst;
+            lMinInventory := lStoreLocationProfilesRec."Min Inventory";
+        end;
+    end;
+}
+"#;
+        assert_eq!(result, expected);
     }
 }

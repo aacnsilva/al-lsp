@@ -4,8 +4,9 @@ use al_syntax::ast::AlSymbolKind;
 use al_syntax::navigation::{identifier_at_offset, resolve_at_offset};
 use al_syntax::symbols::format_hover;
 
-use crate::handlers::completion::enum_value_target_at_offset;
 use crate::convert::lsp_position_to_byte_offset;
+use crate::handlers::completion::enum_value_target_at_offset;
+use crate::handlers::events::{event_subscriber_context_at_offset, find_event_publishers};
 use crate::state::WorldState;
 
 pub fn handle_hover(state: &WorldState, params: HoverParams) -> Option<Hover> {
@@ -38,6 +39,29 @@ pub fn handle_hover(state: &WorldState, params: HoverParams) -> Option<Hover> {
                             });
                         }
                     }
+                }
+            }
+        }
+    }
+
+    let doc = state.documents.get(&uri)?;
+    let source = doc.source();
+    if let Some(ctx) = event_subscriber_context_at_offset(&doc.tree, &source, byte_offset) {
+        if ctx.arg_index >= 2 {
+            if let Some(target) = ctx.target {
+                drop(doc);
+                let publishers = find_event_publishers(state, &target);
+                if !publishers.is_empty() {
+                    return Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: format!(
+                                "```al\n{} {}::{}\n```",
+                                target.object_kind, target.object_name, target.event_name
+                            ),
+                        }),
+                        range: None,
+                    });
                 }
             }
         }

@@ -4,6 +4,7 @@ pub mod diagnostics;
 pub mod document_highlight;
 pub mod document_symbol;
 pub mod document_sync;
+pub mod events;
 pub mod folding_range;
 pub mod formatting;
 pub mod goto_definition;

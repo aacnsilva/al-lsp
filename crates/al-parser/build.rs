@@ -14,10 +14,7 @@ fn main() {
     println!("cargo:rerun-if-changed=grammar.js");
 
     let mut build = cc::Build::new();
-    build
-        .include(src_dir)
-        .file(&parser_c)
-        .warnings(false);
+    build.include(src_dir).file(&parser_c).warnings(false);
 
     // tree-sitter 0.24 ABI
     build.define("TREE_SITTER_HIDE_SYMBOLS", None);

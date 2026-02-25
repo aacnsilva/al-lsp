@@ -422,6 +422,14 @@ fn find_deepest_node(node: Node, byte_offset: usize) -> Option<Node> {
 /// Example: `Record "Customer"` -> `("table", "Customer")`.
 pub fn extract_type_object_name(type_info: &str) -> Option<(&'static str, &str)> {
     let type_info = type_info.trim();
+
+    if type_info.to_ascii_lowercase().starts_with("list of [") {
+        return Some(("list", "List"));
+    }
+    if type_info.to_ascii_lowercase().starts_with("dictionary of [") {
+        return Some(("dictionary", "Dictionary"));
+    }
+
     let split_idx = type_info.find(char::is_whitespace)?;
     let kind = &type_info[..split_idx];
     let mut name = type_info[split_idx..].trim();
@@ -519,9 +527,10 @@ fn collect_folding_ranges_recursive(node: Node, ranges: &mut Vec<FoldingArea>) {
     }
 }
 
-/// When the cursor is on the `method` part of a `method_call` (e.g. the `GetAddress`
-/// in `AddressProvider.GetAddress()`), check whether the object is a variable typed as
-/// an interface. If so, return `(interface_name, method_name)`.
+/// When the cursor is on the procedure-member part of a qualified invocation
+/// (e.g. `AddressProvider.GetAddress()` or `AddressProvider.GetAddress;`), check whether
+/// the object is a variable typed as an interface. If so, return
+/// `(interface_name, method_name)`.
 ///
 /// This lets the references handler redirect to the interface-method reference path
 /// rather than falling through to implementation-procedure logic.
@@ -539,31 +548,27 @@ pub fn interface_method_call_at_offset(
         _ => return None,
     }
 
-    // Must be the `method` field of a `method_call`
+    // Must be the method/member field of a qualified access
     let parent = node.parent()?;
-    if parent.kind() != "method_call" {
-        return None;
-    }
-    let method_node = parent.child_by_field_name("method")?;
+    let method_node = match parent.kind() {
+        "method_call" => parent.child_by_field_name("method")?,
+        "member_access" => parent.child_by_field_name("member")?,
+        _ => return None,
+    };
     if method_node.id() != node.id() {
         return None;
     }
 
     // Get the object node and resolve it
     let object_node = parent.child_by_field_name("object")?;
-    let obj_name = extract_name(object_node, source);
-    let candidates = symbol_table.lookup_in_scope(&obj_name, parent.start_byte());
-
-    for sym in candidates {
-        if matches!(sym.kind, AlSymbolKind::Variable | AlSymbolKind::Parameter) {
-            if let Some(ref type_info) = sym.type_info {
-                let lower = type_info.trim().to_lowercase();
-                if let Some(rest) = lower.strip_prefix("interface ") {
-                    let iface_name = rest.trim().trim_matches('"');
-                    let method_name = extract_name(node, source);
-                    return Some((iface_name.to_string(), method_name));
-                }
-            }
+    if let Some(type_info) =
+        resolve_object_type_info(symbol_table, source, object_node, parent.start_byte())
+    {
+        let lower = type_info.trim().to_lowercase();
+        if let Some(rest) = lower.strip_prefix("interface ") {
+            let iface_name = rest.trim().trim_matches('"');
+            let method_name = extract_name(node, source);
+            return Some((iface_name.to_string(), method_name));
         }
     }
 
@@ -572,8 +577,8 @@ pub fn interface_method_call_at_offset(
 
 /// Find all call sites of a method on variables typed as a specific interface.
 ///
-/// Walks the parse tree looking for `method_call` nodes where:
-/// - The `method` field matches `method_name` (case-insensitive)
+/// Walks the parse tree looking for qualified call-like nodes where:
+/// - The `method`/`member` field matches `method_name` (case-insensitive)
 /// - The `object` field resolves to a variable whose `type_info` is `Interface <interface_name>`
 ///
 /// Returns the start/end points of the `method` identifier node for each matching call.
@@ -608,27 +613,24 @@ fn collect_method_calls(
     method_lower: &str,
     results: &mut Vec<(tree_sitter::Point, tree_sitter::Point)>,
 ) {
-    if node.kind() == "method_call" {
+    if matches!(node.kind(), "method_call" | "member_access") {
+        let method_field = if node.kind() == "method_call" {
+            "method"
+        } else {
+            "member"
+        };
         if let (Some(method_node), Some(object_node)) = (
-            node.child_by_field_name("method"),
+            node.child_by_field_name(method_field),
             node.child_by_field_name("object"),
         ) {
             let call_method = extract_name(method_node, source);
             if call_method.to_lowercase() == *method_lower {
                 // Resolve the object to check if it's typed as the target interface
-                let obj_name = extract_name(object_node, source);
-                let candidates = symbol_table.lookup_in_scope(&obj_name, node.start_byte());
-                for sym in candidates {
-                    if matches!(sym.kind, AlSymbolKind::Variable | AlSymbolKind::Parameter) {
-                        if let Some(ref type_info) = sym.type_info {
-                            if is_interface_type(type_info, iface_lower) {
-                                results.push((
-                                    method_node.start_position(),
-                                    method_node.end_position(),
-                                ));
-                                break;
-                            }
-                        }
+                if let Some(type_info) =
+                    resolve_object_type_info(symbol_table, source, object_node, node.start_byte())
+                {
+                    if is_interface_type(type_info, iface_lower) {
+                        results.push((method_node.start_position(), method_node.end_position()));
                     }
                 }
             }
@@ -648,9 +650,10 @@ fn collect_method_calls(
     }
 }
 
-/// When the cursor is on the `method` part of a `method_call` (e.g. the `HelloWorld2`
-/// in `CompanyAddressProvider2.HelloWorld2()`), check whether the object is a variable
-/// typed as a codeunit. If so, return `(codeunit_name, method_name)`.
+/// When the cursor is on the procedure-member part of a qualified invocation
+/// (e.g. `CompanyAddressProvider2.HelloWorld2()` or `CompanyAddressProvider2.HelloWorld2;`),
+/// check whether the object is a variable typed as a codeunit.
+/// If so, return `(codeunit_name, method_name)`.
 pub fn codeunit_method_call_at_offset(
     tree: &Tree,
     source: &str,
@@ -665,26 +668,22 @@ pub fn codeunit_method_call_at_offset(
     }
 
     let parent = node.parent()?;
-    if parent.kind() != "method_call" {
-        return None;
-    }
-    let method_node = parent.child_by_field_name("method")?;
+    let method_node = match parent.kind() {
+        "method_call" => parent.child_by_field_name("method")?,
+        "member_access" => parent.child_by_field_name("member")?,
+        _ => return None,
+    };
     if method_node.id() != node.id() {
         return None;
     }
 
     let object_node = parent.child_by_field_name("object")?;
-    let obj_name = extract_name(object_node, source);
-    let candidates = symbol_table.lookup_in_scope(&obj_name, parent.start_byte());
-
-    for sym in candidates {
-        if matches!(sym.kind, AlSymbolKind::Variable | AlSymbolKind::Parameter) {
-            if let Some(ref type_info) = sym.type_info {
-                if let Some(cu_name) = extract_codeunit_type_name(type_info) {
-                    let method_name = extract_name(node, source);
-                    return Some((cu_name.to_string(), method_name));
-                }
-            }
+    if let Some(type_info) =
+        resolve_object_type_info(symbol_table, source, object_node, parent.start_byte())
+    {
+        if let Some(cu_name) = extract_codeunit_type_name(type_info) {
+            let method_name = extract_name(node, source);
+            return Some((cu_name.to_string(), method_name));
         }
     }
 
@@ -743,26 +742,23 @@ fn collect_codeunit_method_calls(
     method_lower: &str,
     results: &mut Vec<(tree_sitter::Point, tree_sitter::Point)>,
 ) {
-    if node.kind() == "method_call" {
+    if matches!(node.kind(), "method_call" | "member_access") {
+        let method_field = if node.kind() == "method_call" {
+            "method"
+        } else {
+            "member"
+        };
         if let (Some(method_node), Some(object_node)) = (
-            node.child_by_field_name("method"),
+            node.child_by_field_name(method_field),
             node.child_by_field_name("object"),
         ) {
             let call_method = extract_name(method_node, source);
             if call_method.to_lowercase() == *method_lower {
-                let obj_name = extract_name(object_node, source);
-                let candidates = symbol_table.lookup_in_scope(&obj_name, node.start_byte());
-                for sym in candidates {
-                    if matches!(sym.kind, AlSymbolKind::Variable | AlSymbolKind::Parameter) {
-                        if let Some(ref type_info) = sym.type_info {
-                            if is_codeunit_type(type_info, cu_lower) {
-                                results.push((
-                                    method_node.start_position(),
-                                    method_node.end_position(),
-                                ));
-                                break;
-                            }
-                        }
+                if let Some(type_info) =
+                    resolve_object_type_info(symbol_table, source, object_node, node.start_byte())
+                {
+                    if is_codeunit_type(type_info, cu_lower) {
+                        results.push((method_node.start_position(), method_node.end_position()));
                     }
                 }
             }
@@ -839,6 +835,64 @@ fn is_interface_type(type_info: &str, iface_name_lower: &str) -> bool {
         return name == iface_name_lower;
     }
     false
+}
+
+fn resolve_object_type_info<'a>(
+    symbol_table: &'a DocumentSymbolTable,
+    source: &str,
+    object_node: Node<'_>,
+    scope_byte: usize,
+) -> Option<&'a str> {
+    let object_node = unwrap_primary_expression(object_node);
+    match object_node.kind() {
+        "identifier" | "quoted_identifier" => {
+            let obj_name = extract_name(object_node, source);
+            let candidates = symbol_table.lookup_in_scope(&obj_name, scope_byte);
+            for sym in candidates {
+                if matches!(
+                    sym.kind,
+                    AlSymbolKind::Variable | AlSymbolKind::Parameter | AlSymbolKind::Procedure
+                ) {
+                    if let Some(ref type_info) = sym.type_info {
+                        return Some(type_info.as_str());
+                    }
+                }
+            }
+            None
+        }
+        "function_call" => {
+            let function_node = object_node
+                .child_by_field_name("function")
+                .or_else(|| object_node.child_by_field_name("name"))?;
+            let function_name = extract_name(function_node, source);
+            let candidates = symbol_table.lookup_in_scope(&function_name, object_node.start_byte());
+            for sym in candidates {
+                if matches!(sym.kind, AlSymbolKind::Procedure) {
+                    if let Some(ref type_info) = sym.type_info {
+                        return Some(type_info.as_str());
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn unwrap_primary_expression(mut node: Node<'_>) -> Node<'_> {
+    while node.kind() == "primary_expression" {
+        let mut cursor = node.walk();
+        let mut first_named = None;
+        for child in node.named_children(&mut cursor) {
+            first_named = Some(child);
+            break;
+        }
+        let Some(child) = first_named else {
+            break;
+        };
+        node = child;
+    }
+    node
 }
 
 fn strip_ascii_case_suffix<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
@@ -1104,6 +1158,14 @@ mod tests {
             extract_type_object_name("Record Customer temporary"),
             Some(("table", "Customer"))
         );
+        assert_eq!(
+            extract_type_object_name("Dictionary of [Text, Text]"),
+            Some(("dictionary", "Dictionary"))
+        );
+        assert_eq!(
+            extract_type_object_name("List of [Text]"),
+            Some(("list", "List"))
+        );
         assert_eq!(extract_type_object_name("Integer"), None);
         assert_eq!(extract_type_object_name("Text[100]"), None);
     }
@@ -1153,5 +1215,115 @@ mod tests {
             ranges.len()
         );
         assert!(ranges.iter().all(|r| r.end_line > r.start_line));
+    }
+
+    #[test]
+    fn test_interface_method_call_at_offset_without_parentheses() {
+        let source = r#"interface IAddressProvider
+{
+    procedure GetAddress(): Text;
+}
+
+codeunit 50100 Test
+{
+    procedure Run()
+    var
+        AddressProvider: Interface IAddressProvider;
+    begin
+        AddressProvider.GetAddress;
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        let offset = source.find("GetAddress;").unwrap();
+        let ctx = interface_method_call_at_offset(&tree, source, &table, offset);
+        assert_eq!(
+            ctx,
+            Some(("iaddressprovider".to_string(), "GetAddress".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_codeunit_method_call_at_offset_without_parentheses() {
+        let source = r#"codeunit 50201 CompanyAddressProvider2
+{
+    procedure HelloWorld2()
+    begin
+    end;
+}
+
+codeunit 50100 Test
+{
+    procedure Run()
+    var
+        Provider: Codeunit CompanyAddressProvider2;
+    begin
+        Provider.HelloWorld2;
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        let offset = source.find("HelloWorld2;").unwrap();
+        let ctx = codeunit_method_call_at_offset(&tree, source, &table, offset);
+        assert_eq!(
+            ctx,
+            Some(("CompanyAddressProvider2".to_string(), "HelloWorld2".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_find_interface_method_calls_includes_member_access_without_parentheses() {
+        let source = r#"interface IAddressProvider
+{
+    procedure GetAddress(): Text;
+}
+
+codeunit 50100 Test
+{
+    procedure Run()
+    var
+        AddressProvider: Interface IAddressProvider;
+    begin
+        AddressProvider.GetAddress;
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        let calls =
+            find_interface_method_calls(&tree, source, &table, "IAddressProvider", "GetAddress");
+        assert_eq!(calls.len(), 1, "expected one interface call, got {calls:?}");
+    }
+
+    #[test]
+    fn test_find_codeunit_method_calls_includes_member_access_without_parentheses() {
+        let source = r#"codeunit 50201 CompanyAddressProvider2
+{
+    procedure HelloWorld2()
+    begin
+    end;
+}
+
+codeunit 50100 Test
+{
+    procedure Run()
+    var
+        Provider: Codeunit CompanyAddressProvider2;
+    begin
+        Provider.HelloWorld2;
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        let calls =
+            find_codeunit_method_calls(&tree, source, &table, "CompanyAddressProvider2", "HelloWorld2");
+        assert_eq!(calls.len(), 1, "expected one codeunit call, got {calls:?}");
     }
 }
