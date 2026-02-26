@@ -103,7 +103,15 @@ module.exports = grammar({
       seq(kw("report"), $.integer_literal, $._object_name, "{", optional($._object_body), "}"),
 
     enum_declaration: ($) =>
-      seq(kw("enum"), $.integer_literal, $._object_name, "{", optional($._enum_body), "}"),
+      seq(
+        kw("enum"),
+        $.integer_literal,
+        $._object_name,
+        optional($.implements_clause),
+        "{",
+        optional($._enum_body),
+        "}"
+      ),
 
     enum_extension_declaration: ($) =>
       seq(
@@ -201,10 +209,19 @@ module.exports = grammar({
 
     property: ($) =>
       seq(
-        field("name", choice($.identifier, $.quoted_identifier)),
+        field("name", $.property_name),
         "=",
         field("value", $._property_value),
         ";"
+      ),
+
+    property_name: ($) =>
+      choice(
+        $.identifier,
+        $.quoted_identifier,
+        // Handle cases where keywords are tokenized as a prefix of property names
+        // (e.g. `TableRelation` -> `Table` + `Relation`).
+        seq(kw("table"), $.identifier)
       ),
 
     _property_value: ($) =>

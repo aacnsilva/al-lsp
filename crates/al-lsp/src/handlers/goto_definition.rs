@@ -1,6 +1,7 @@
 use lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location};
+use tree_sitter::Point;
 
-use al_syntax::ast::{extract_name, AlSymbolKind};
+use al_syntax::ast::{extract_name, AlSymbol, AlSymbolKind};
 use al_syntax::navigation::{
     extract_type_object_name, identifier_context_at_offset, resolve_at_offset,
 };
@@ -86,7 +87,10 @@ fn find_object_member_declarations(
 ) -> Vec<Location> {
     let mut locations = Vec::new();
     for entry in state.documents.iter() {
-        for symbol in &entry.value().symbol_table.symbols {
+        let uri = entry.key().clone();
+        let doc = entry.value();
+        let source = doc.source();
+        for symbol in &doc.symbol_table.symbols {
             let AlSymbolKind::Object(kind) = symbol.kind else {
                 continue;
             };
@@ -96,6 +100,7 @@ fn find_object_member_declarations(
                 continue;
             }
 
+            let mut found_symbol_member = false;
             for child in &symbol.children {
                 if !child.name.eq_ignore_ascii_case(member_name) {
                     continue;
@@ -103,14 +108,111 @@ fn find_object_member_declarations(
                 if is_method_call && !matches!(child.kind, AlSymbolKind::Procedure) {
                     continue;
                 }
+                found_symbol_member = true;
                 locations.push(Location {
-                    uri: entry.key().clone(),
+                    uri: uri.clone(),
                     range: ts_range_to_lsp_range(child.start_point, child.end_point),
                 });
+            }
+
+            if !is_method_call
+                && kind.label().eq_ignore_ascii_case("table")
+                && !found_symbol_member
+            {
+                if let Some(location) =
+                    find_table_field_location(&uri, source.as_str(), symbol, member_name)
+                {
+                    locations.push(location);
+                }
             }
         }
     }
     locations
+}
+
+fn find_table_field_location(
+    uri: &lsp_types::Url,
+    source: &str,
+    table_symbol: &AlSymbol,
+    field_name: &str,
+) -> Option<Location> {
+    let object_start = table_symbol.start_byte.min(source.len());
+    let object_end = table_symbol.end_byte.min(source.len());
+    if object_start >= object_end {
+        return None;
+    }
+    let object_text = &source[object_start..object_end];
+    let (field_start, field_end) = find_field_name_span_in_object_text(object_text, field_name)?;
+    let start_point = point_from_relative_byte(table_symbol.start_point, object_text, field_start);
+    let end_point = point_from_relative_byte(table_symbol.start_point, object_text, field_end);
+    Some(Location {
+        uri: uri.clone(),
+        range: ts_range_to_lsp_range(start_point, end_point),
+    })
+}
+
+fn find_field_name_span_in_object_text(object_text: &str, field_name: &str) -> Option<(usize, usize)> {
+    let object_lower = object_text.to_ascii_lowercase();
+    let bytes = object_text.as_bytes();
+    let mut cursor = 0usize;
+    while cursor < object_lower.len() {
+        let Some(rel) = object_lower[cursor..].find("field") else {
+            break;
+        };
+        let field_kw_start = cursor + rel;
+        let mut open_paren = field_kw_start + "field".len();
+        while open_paren < bytes.len() && bytes[open_paren].is_ascii_whitespace() {
+            open_paren += 1;
+        }
+        if open_paren >= bytes.len() || bytes[open_paren] != b'(' {
+            cursor = field_kw_start + "field".len();
+            continue;
+        }
+
+        let field_body_start = open_paren + 1;
+        let Some(first_sep_rel) = object_text[field_body_start..].find(';') else {
+            break;
+        };
+        let second_arg_start = field_body_start + first_sep_rel + 1;
+        let Some(second_sep_rel) = object_text[second_arg_start..].find(';') else {
+            cursor = field_kw_start + "field".len();
+            continue;
+        };
+        let second_arg_end = second_arg_start + second_sep_rel;
+
+        let mut name_start = second_arg_start;
+        while name_start < second_arg_end && bytes[name_start].is_ascii_whitespace() {
+            name_start += 1;
+        }
+        let mut name_end = second_arg_end;
+        while name_end > name_start && bytes[name_end - 1].is_ascii_whitespace() {
+            name_end -= 1;
+        }
+        if name_end > name_start + 1 && bytes[name_start] == b'"' && bytes[name_end - 1] == b'"' {
+            name_start += 1;
+            name_end -= 1;
+        }
+
+        if name_end > name_start && object_text[name_start..name_end].eq_ignore_ascii_case(field_name) {
+            return Some((name_start, name_end));
+        }
+        cursor = field_kw_start + "field".len();
+    }
+    None
+}
+
+fn point_from_relative_byte(base: Point, text: &str, rel: usize) -> Point {
+    let mut point = base;
+    let rel = rel.min(text.len());
+    for &byte in text.as_bytes().iter().take(rel) {
+        if byte == b'\n' {
+            point.row += 1;
+            point.column = 0;
+        } else {
+            point.column += 1;
+        }
+    }
+    point
 }
 
 fn type_target_from_type_identifier(
@@ -160,6 +262,20 @@ fn type_target_from_type_identifier(
         }
         _ => None,
     }
+}
+
+fn interface_target_from_implements_identifier(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+) -> Option<(&'static str, String)> {
+    if !matches!(node.kind(), "identifier" | "quoted_identifier") {
+        return None;
+    }
+    let parent = node.parent()?;
+    if parent.kind() == "implements_clause" {
+        return Some(("interface", extract_name(node, source)));
+    }
+    None
 }
 
 pub fn handle_goto_definition(
@@ -340,6 +456,7 @@ pub fn handle_goto_definition(
 
     let mut symbol_type_target: Option<(String, String)> = None;
     let mut node_type_target: Option<(String, String)> = None;
+    let mut implements_type_target: Option<(String, String)> = None;
     if let Some(ctx) = id_ctx {
         // Variable/parameter usage: jump to the declared object type (Record/Codeunit/etc).
         if let Some(sym) = ctx.symbol {
@@ -359,9 +476,33 @@ pub fn handle_goto_definition(
         {
             node_type_target = Some((object_kind.to_string(), object_name));
         }
+
+        // Cursor on an interface name inside an object `implements` clause.
+        if let Some((object_kind, object_name)) =
+            interface_target_from_implements_identifier(ctx.node, &source)
+        {
+            implements_type_target = Some((object_kind.to_string(), object_name));
+        }
     }
 
     if let Some((object_kind, object_name)) = symbol_type_target {
+        drop(doc);
+        if let Some(resp) =
+            to_definition_response(find_object_declarations(state, &object_kind, &object_name))
+        {
+            return Some(resp);
+        }
+        let doc = state.documents.get(&uri)?;
+        let source = doc.source();
+        let resolved = resolve_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)?;
+        let range = ts_range_to_lsp_range(resolved.symbol.start_point, resolved.symbol.end_point);
+        return Some(GotoDefinitionResponse::Scalar(Location {
+            uri: uri.clone(),
+            range,
+        }));
+    }
+
+    if let Some((object_kind, object_name)) = implements_type_target {
         drop(doc);
         if let Some(resp) =
             to_definition_response(find_object_declarations(state, &object_kind, &object_name))
@@ -884,6 +1025,185 @@ codeunit 50100 Test
         assert!(
             locs.iter().any(|l| l.range.start.line == 3),
             "expected navigation to event declaration on line 3, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_interface_name_in_enum_implements_clause() {
+        let iface_source = r#"interface "Dummy Device Action"
+{
+    procedure RunAction();
+}"#;
+        let enum_source = r#"enum 50100 "Dummy RFID Action" implements "Dummy Device Action"
+{
+    value(0; None)
+    {
+    }
+}"#;
+        let iface_uri = Url::parse("file:///test/interface.al").unwrap();
+        let enum_uri = Url::parse("file:///test/enum.al").unwrap();
+
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(iface_uri.clone(), DocumentState::new(iface_source).unwrap());
+        state
+            .documents
+            .insert(enum_uri.clone(), DocumentState::new(enum_source).unwrap());
+
+        let (line, character) = cursor_on(enum_source, "\"Dummy Device Action\"");
+        let params = make_goto_params(enum_uri, line, character);
+        let result = handle_goto_definition(&state, params);
+        assert!(
+            result.is_some(),
+            "expected goto-definition to resolve interface in implements clause"
+        );
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter()
+                .any(|l| l.uri == iface_uri && l.range.start.line == 0),
+            "expected navigation to interface declaration, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_record_slash_field_member_to_table_field_declaration() {
+        let enum_source = r#"enum 50100 "Dummy Trigger Mode"
+{
+    value(0; "On Item Added")
+    {
+    }
+}"#;
+        let table_source = r#"table 50100 "Dummy Hospitality Type"
+{
+    fields
+    {
+        field(8; "Dining Area ID"; Code[20])
+        {
+            TableRelation = IF ("Access To Other Restaurant" = FILTER('')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Restaurant No."))
+            ELSE
+            IF ("Access To Other Restaurant" = FILTER(<> '')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Access To Other Restaurant"));
+        }
+        field(9; "Access To Other Restaurant"; Code[20]) { }
+        field(10; "KDS Display/Printing"; Enum "Dummy Trigger Mode") { }
+        field(11; "Restaurant No."; Code[20]) { }
+    }
+}"#;
+        let codeunit_source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        HospType: Record "Dummy Hospitality Type";
+    begin
+        if HospType."KDS Display/Printing" = HospType."KDS Display/Printing"::"On Item Added" then;
+    end;
+}"#;
+
+        let enum_uri = Url::parse("file:///test/enum.al").unwrap();
+        let table_uri = Url::parse("file:///test/table.al").unwrap();
+        let codeunit_uri = Url::parse("file:///test/test.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(enum_uri, DocumentState::new(enum_source).unwrap());
+        state
+            .documents
+            .insert(table_uri.clone(), DocumentState::new(table_source).unwrap());
+        state.documents.insert(
+            codeunit_uri.clone(),
+            DocumentState::new(codeunit_source).unwrap(),
+        );
+
+        let (line, character) =
+            cursor_on(codeunit_source, "\"KDS Display/Printing\" = HospType");
+        let params = make_goto_params(codeunit_uri, line, character + 1);
+        let result = handle_goto_definition(&state, params);
+        assert!(
+            result.is_some(),
+            "expected goto-definition to return table field declaration"
+        );
+
+        let expected_line =
+            table_source[..table_source.find("\"KDS Display/Printing\"").unwrap()]
+                .bytes()
+                .filter(|&b| b == b'\n')
+                .count() as u32;
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter()
+                .any(|l| l.uri == table_uri && l.range.start.line == expected_line),
+            "expected navigation to slash field declaration in table document, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_enum_value_from_record_slash_field_qualified_usage() {
+        let enum_source = r#"enum 50100 "Dummy Trigger Mode"
+{
+    value(0; "On Item Added")
+    {
+    }
+    value(1; Manual)
+    {
+    }
+}"#;
+        let table_source = r#"table 50100 "Dummy Hospitality Type"
+{
+    fields
+    {
+        field(8; "Dining Area ID"; Code[20])
+        {
+            TableRelation = IF ("Access To Other Restaurant" = FILTER('')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Restaurant No."))
+            ELSE
+            IF ("Access To Other Restaurant" = FILTER(<> '')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Access To Other Restaurant"));
+        }
+        field(9; "Access To Other Restaurant"; Code[20]) { }
+        field(10; "KDS Display/Printing"; Enum "Dummy Trigger Mode") { }
+        field(11; "Restaurant No."; Code[20]) { }
+    }
+}"#;
+        let codeunit_source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        HospType: Record "Dummy Hospitality Type";
+    begin
+        if HospType."KDS Display/Printing" = HospType."KDS Display/Printing"::"On Item Added" then;
+    end;
+}"#;
+
+        let enum_uri = Url::parse("file:///test/enum.al").unwrap();
+        let table_uri = Url::parse("file:///test/table.al").unwrap();
+        let codeunit_uri = Url::parse("file:///test/test.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(enum_uri.clone(), DocumentState::new(enum_source).unwrap());
+        state
+            .documents
+            .insert(table_uri, DocumentState::new(table_source).unwrap());
+        state.documents.insert(
+            codeunit_uri.clone(),
+            DocumentState::new(codeunit_source).unwrap(),
+        );
+
+        let (line, character) = cursor_on(codeunit_source, "\"On Item Added\"");
+        let params = make_goto_params(codeunit_uri, line, character + 1);
+        let result = handle_goto_definition(&state, params);
+        assert!(
+            result.is_some(),
+            "expected goto-definition to return enum value declaration"
+        );
+
+        let expected_line = enum_source[..enum_source.find("\"On Item Added\"").unwrap()]
+            .bytes()
+            .filter(|&b| b == b'\n')
+            .count() as u32;
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter()
+                .any(|l| l.uri == enum_uri && l.range.start.line == expected_line),
+            "expected navigation to enum value declaration in enum document, got: {locs:?}"
         );
     }
 }

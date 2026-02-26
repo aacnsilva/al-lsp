@@ -4,9 +4,10 @@ use tower_lsp::Client;
 
 use al_syntax::ast::{extract_name, node_text, AlObjectKind, AlSymbol, AlSymbolKind};
 use al_syntax::document::DocumentState;
-use al_syntax::navigation::{extract_type_object_name, node_at_offset};
+use al_syntax::navigation::node_at_offset;
 
 use crate::state::WorldState;
+use crate::handlers::completion::resolve_object_type_from_expression;
 
 pub async fn publish_diagnostics(
     client: &Client,
@@ -209,6 +210,58 @@ fn resolve_object_entries(
     entries
 }
 
+fn is_simple_identifier_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn table_field_declared_in_source(
+    state: &WorldState,
+    table_name: &str,
+    field_name: &str,
+) -> bool {
+    for entry in state.documents.iter() {
+        let doc = entry.value();
+        let source = doc.source();
+        for symbol in &doc.symbol_table.symbols {
+            let AlSymbolKind::Object(kind) = symbol.kind else {
+                continue;
+            };
+            if kind.label() != "table" || !symbol.name.eq_ignore_ascii_case(table_name) {
+                continue;
+            }
+
+            let start = symbol.start_byte.min(source.len());
+            let end = symbol.end_byte.min(source.len());
+            if start >= end {
+                continue;
+            }
+            let object_text = &source[start..end];
+
+            // Common AL form: field(<id>; "<Field Name>"; <Type>)
+            let quoted_pattern = format!("; \"{}\";", field_name);
+            if object_text.contains(&quoted_pattern) {
+                return true;
+            }
+
+            // Unquoted identifier field name.
+            if is_simple_identifier_name(field_name) {
+                let bare_pattern = format!("; {};", field_name);
+                if object_text.contains(&bare_pattern) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn build_object_decl_entry(
     uri: &Url,
     target_doc: &DocumentState,
@@ -254,35 +307,32 @@ fn validate_member_access(
     let object_node = unwrap_primary_expression(object_node);
     let member_node = unwrap_primary_expression(member_node);
 
-    if !matches!(object_node.kind(), "identifier" | "quoted_identifier")
-        || !matches!(member_node.kind(), "identifier" | "quoted_identifier")
-    {
+    if !matches!(member_node.kind(), "identifier" | "quoted_identifier") {
         return;
     }
 
-    let object_name = extract_name(object_node, source);
     let member_name = extract_name(member_node, source);
 
-    let object_symbol = doc
-        .symbol_table
-        .lookup_in_scope(&object_name, scope_byte)
-        .into_iter()
-        .find(|sym| {
-            matches!(
-                sym.kind,
-                AlSymbolKind::Variable | AlSymbolKind::Parameter | AlSymbolKind::Procedure
-            )
-        });
-    let Some(object_symbol) = object_symbol else {
+    let Some((target_kind, target_object_name)) = resolve_object_type_from_expression(
+        state,
+        doc,
+        source,
+        object_node,
+        scope_byte,
+        0,
+    ) else {
         return;
     };
 
-    let Some(type_info) = object_symbol.type_info.as_deref() else {
+    if is_known_builtin_method(&target_kind, &member_name) {
         return;
-    };
-    let Some((target_kind, target_object_name)) = extract_type_object_name(type_info) else {
+    }
+    if !is_method_call
+        && target_kind.eq_ignore_ascii_case("table")
+        && is_known_system_table_field(&member_name)
+    {
         return;
-    };
+    }
 
     let caller_object = enclosing_object_context(node_at_offset(&doc.tree, scope_byte), source);
     let object_key = (
@@ -290,7 +340,7 @@ fn validate_member_access(
         target_object_name.to_ascii_lowercase(),
     );
     if !object_member_lookup_cache.contains_key(&object_key) {
-        let resolved = resolve_object_entries(state, target_kind, target_object_name);
+        let resolved = resolve_object_entries(state, &target_kind, &target_object_name);
         if resolved.is_empty() {
             object_member_lookup_cache.insert(object_key.clone(), None);
         } else {
@@ -321,13 +371,11 @@ fn validate_member_access(
     let range = ts_range_to_lsp_range(member_node.start_position(), member_node.end_position());
 
     if matching_members.is_empty() {
-        if is_known_builtin_method(target_kind, &member_name) {
+        if !is_method_call
+            && target_kind.eq_ignore_ascii_case("table")
+            && table_field_declared_in_source(state, &target_object_name, &member_name)
+        {
             return;
-        }
-        if !is_method_call && target_kind.eq_ignore_ascii_case("table") {
-            if is_known_system_table_field(&member_name) {
-                return;
-            }
         }
 
         diagnostics.push(Diagnostic {
@@ -351,8 +399,8 @@ fn validate_member_access(
             if !procedure_accessible(
                 proc_match.access,
                 caller_object.as_ref(),
-                target_kind,
-                target_object_name,
+                &target_kind,
+                &target_object_name,
                 caller_uri,
                 &proc_match.target_uri,
             ) {
@@ -387,8 +435,8 @@ fn validate_member_access(
             && !procedure_accessible(
                 member_match.access,
                 caller_object.as_ref(),
-                target_kind,
-                target_object_name,
+                &target_kind,
+                &target_object_name,
                 caller_uri,
                 &member_match.target_uri,
             )
@@ -479,6 +527,7 @@ fn is_known_record_method(name: &str) -> bool {
             | "setrange"
             | "setrecfilter"
             | "tablecaption"
+            | "tablename"
             | "testfield"
             | "transferfields"
             | "validate"
@@ -492,7 +541,14 @@ fn is_known_codeunit_method(name: &str) -> bool {
 fn is_known_page_method(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "run" | "runmodal" | "setrecord" | "getrecord" | "update" | "close"
+        "run"
+            | "runmodal"
+            | "setrecord"
+            | "getrecord"
+            | "update"
+            | "close"
+            | "settableview"
+            | "lookupmode"
     )
 }
 
@@ -522,6 +578,10 @@ fn is_known_query_method(name: &str) -> bool {
         name.to_ascii_lowercase().as_str(),
         "open" | "read" | "close" | "saveasxml" | "setfilter"
     )
+}
+
+fn is_known_enum_method(name: &str) -> bool {
+    matches!(name.to_ascii_lowercase().as_str(), "names" | "ordinals")
 }
 
 fn is_known_list_method(name: &str) -> bool {
@@ -564,6 +624,7 @@ fn is_known_builtin_method(object_kind: &str, method_name: &str) -> bool {
         "report" => is_known_report_method(method_name),
         "xmlport" => is_known_xmlport_method(method_name),
         "query" => is_known_query_method(method_name),
+        "enum" => is_known_enum_method(method_name),
         "list" => is_known_list_method(method_name),
         "dictionary" => is_known_dictionary_method(method_name),
         _ => false,
@@ -894,6 +955,35 @@ codeunit 50100 Test
     }
 
     #[test]
+    fn test_no_semantic_diagnostic_for_builtin_record_tablename_without_parentheses() {
+        let source = r#"table 50100 Customer
+{
+}
+
+codeunit 50100 Test
+{
+    procedure Run()
+    var
+        Rec: Record Customer;
+        NameTxt: Text;
+    begin
+        NameTxt := Rec.TableName;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("TableName")),
+            "did not expect diagnostics for TableName built-in Record method, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn test_no_semantic_diagnostic_for_builtin_page_method() {
         let source = r#"page 50100 "Customer Card"
 {
@@ -918,6 +1008,218 @@ codeunit 50100 Test
         assert!(
             !diags.iter().any(|d| d.message.contains("RunModal")),
             "did not expect diagnostics for built-in Page method, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_page_settableview_and_lookupmode() {
+        let source = r#"table 50100 "Dummy Setup"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+
+page 50100 "Dummy Setup Card"
+{
+    SourceTable = "Dummy Setup";
+}
+
+codeunit 50100 Test
+{
+    procedure Run()
+    var
+        SetupRec: Record "Dummy Setup";
+        SetupPage: Page "Dummy Setup Card";
+        Result: Action;
+    begin
+        SetupPage.SetTableView(SetupRec);
+        SetupPage.LookupMode(true);
+        Result := SetupPage.RunModal;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("SetTableView")
+                    || d.message.contains("LookupMode")
+                    || d.message.contains("RunModal")
+            }),
+            "did not expect diagnostics for built-in Page methods, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_enum_names_and_ordinals() {
+        let source = r#"enum 50100 "Dummy State"
+{
+    value(0; Open) { }
+    value(1; Closed) { }
+}
+
+codeunit 50100 Test
+{
+    procedure Run()
+    var
+        CurrentState: Enum "Dummy State";
+    begin
+        CurrentState.Names;
+        CurrentState.Ordinals;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.message.contains("Names") || d.message.contains("Ordinals")),
+            "did not expect diagnostics for built-in Enum members, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_fields_after_tablerelation_if_else() {
+        let source = r#"table 50100 "Dummy Hospitality Setup"
+{
+    fields
+    {
+        field(1; "Restaurant No."; Code[20]) { }
+        field(2; "Access To Other Restaurant"; Code[20]) { }
+        field(3; "Dining Area ID"; Code[20])
+        {
+            TableRelation = IF ("Access To Other Restaurant" = FILTER('')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Restaurant No."))
+                            ELSE
+                            IF ("Access To Other Restaurant" = FILTER(<> '')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Access To Other Restaurant"));
+        }
+        field(4; "Display/Printing Mode"; Integer) { }
+        field(5; "Service Flow ID"; Code[20]) { }
+    }
+}
+
+codeunit 50100 Test
+{
+    procedure Run()
+    var
+        Setup: Record "Dummy Hospitality Setup";
+    begin
+        if Setup."Display/Printing Mode" = 0 then
+            Setup."Service Flow ID" := 'FLOW-1';
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("Display/Printing Mode")
+                    || d.message.contains("Service Flow ID")
+            }),
+            "did not expect diagnostics for valid quoted fields, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_record_enum_field_qualified_value() {
+        let source = r#"enum 50100 "Dummy Trigger Mode"
+{
+    value(0; "On Item Added") { }
+    value(1; "Manual") { }
+}
+
+table 50100 "Dummy Hospitality Setup"
+{
+    fields
+    {
+        field(1; "Display/Printing Mode"; Enum "Dummy Trigger Mode") { }
+    }
+}
+
+codeunit 50100 Test
+{
+    procedure Run()
+    var
+        Setup: Record "Dummy Hospitality Setup";
+    begin
+        if Setup."Display/Printing Mode" = Setup."Display/Printing Mode"::"On Item Added" then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("Display/Printing Mode")
+                    || d.message.contains("On Item Added")
+            }),
+            "did not expect diagnostics for Record.EnumField::EnumValue access, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_record_enum_field_after_tablerelation_if_else_field() {
+        let source = r#"enum 50100 "Dummy KDS-Trigger Sends"
+{
+    value(0; "On Item Added") { }
+    value(1; "Manual") { }
+}
+
+table 50100 "Dummy Hospitality Type"
+{
+    fields
+    {
+        field(8; "Dining Area ID"; Code[20])
+        {
+            TableRelation = IF ("Access To Other Restaurant" = FILTER('')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Restaurant No."))
+            ELSE
+            IF ("Access To Other Restaurant" = FILTER(<> '')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Access To Other Restaurant"));
+        }
+        field(9; "Access To Other Restaurant"; Code[20]) { }
+        field(10; "KDS Display/Printing"; Enum "Dummy KDS-Trigger Sends") { }
+        field(11; "Restaurant No."; Code[20]) { }
+    }
+}
+
+codeunit 50100 Test
+{
+    procedure Run()
+    var
+        HospType: Record "Dummy Hospitality Type";
+    begin
+        if HospType."KDS Display/Printing" = HospType."KDS Display/Printing"::"On Item Added" then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.message.contains("KDS Display/Printing")),
+            "did not expect diagnostics for KDS Display/Printing access after TableRelation IF/ELSE, got: {diags:?}"
         );
     }
 

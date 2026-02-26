@@ -1,0 +1,5 @@
+# Generated Tree-sitter parser artifacts
+src/parser.c linguist-generated=true
+src/tree_sitter/*.h linguist-generated=true
+crates/al-parser/src/parser.c linguist-generated=true
+crates/al-parser/src/tree_sitter/*.h linguist-generated=true

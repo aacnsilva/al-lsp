@@ -415,6 +415,62 @@ codeunit 50101 "My Subscriber"
     }
 
     #[test]
+    fn test_no_errors_for_property_name_keyword_prefix_and_tablerelation_where_consts() {
+        let source = r#"table 50100 "Dummy Config"
+{
+    fields
+    {
+        field(21; "After Action"; Option)
+        {
+            OptionCaption = 'Return,Stay';
+            OptionMembers = "Return","Stay";
+        }
+        field(22; "Income Account 1"; Code[20])
+        {
+            Caption = 'Income Account 1';
+            TableRelation = "Dummy Income/Expense Account"."No." WHERE("Store No." = FIELD("Restaurant No."),
+                                                                       "Account Type" = CONST(Income),
+                                                                       "Gratuity Type" = CONST(Tips));
+        }
+        field(23; "Income Account 2"; Code[20])
+        {
+            Caption = 'Income Account 2';
+            TableRelation = "Dummy Income/Expense Account"."No." WHERE("Store No." = FIELD("Restaurant No."),
+                                                                       "Account Type" = CONST(Income),
+                                                                       "Gratuity Type" = CONST(Tips));
+        }
+        field(24; "Restaurant No."; Code[20])
+        {
+        }
+    }
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for keyword-prefixed property names and WHERE CONST filters, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn test_no_errors_for_enum_with_implements_clause() {
+        let source = r#"enum 50100 "Dummy Action" implements "Dummy Contract"
+{
+    value(0; None)
+    {
+    }
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for enum with implements clause, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
     fn test_no_errors_for_escaped_single_quote_in_label() {
         let source = r#"codeunit 50100 Test
 {

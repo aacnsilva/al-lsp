@@ -620,8 +620,86 @@ fn find_table_field_enum_type(
     table_name: &str,
     field_name: &str,
 ) -> Option<String> {
+    let type_info = find_table_field_type(state, table_name, field_name)?;
+    let (object_kind, enum_name) = extract_type_object_name(&type_info)?;
+    if object_kind.eq_ignore_ascii_case("enum") {
+        return Some(enum_name.to_string());
+    }
+    None
+}
+
+fn is_simple_identifier_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn parse_field_type_after_marker(object_text: &str, marker_end: usize) -> Option<String> {
+    if marker_end >= object_text.len() {
+        return None;
+    }
+    let bytes = object_text.as_bytes();
+    let mut cursor = marker_end;
+    while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+        cursor += 1;
+    }
+    if cursor >= bytes.len() {
+        return None;
+    }
+    let close_paren_rel = object_text[cursor..].find(')')?;
+    let close_paren = cursor + close_paren_rel;
+    if close_paren <= cursor {
+        return None;
+    }
+    let type_info = object_text[cursor..close_paren].trim();
+    if type_info.is_empty() {
+        return None;
+    }
+    Some(type_info.to_string())
+}
+
+fn find_table_field_type_in_object_text(object_text: &str, field_name: &str) -> Option<String> {
+    let quoted_marker = format!("; \"{}\";", field_name);
+    let mut search_from = 0usize;
+    while let Some(pos) = object_text[search_from..].find(&quoted_marker) {
+        let marker_start = search_from + pos;
+        let marker_end = marker_start + quoted_marker.len();
+        if let Some(type_info) = parse_field_type_after_marker(object_text, marker_end) {
+            return Some(type_info);
+        }
+        search_from = marker_end;
+    }
+
+    if is_simple_identifier_name(field_name) {
+        let bare_marker = format!("; {};", field_name);
+        let mut search_from = 0usize;
+        while let Some(pos) = object_text[search_from..].find(&bare_marker) {
+            let marker_start = search_from + pos;
+            let marker_end = marker_start + bare_marker.len();
+            if let Some(type_info) = parse_field_type_after_marker(object_text, marker_end) {
+                return Some(type_info);
+            }
+            search_from = marker_end;
+        }
+    }
+
+    None
+}
+
+pub(crate) fn find_table_field_type(
+    state: &WorldState,
+    table_name: &str,
+    field_name: &str,
+) -> Option<String> {
     for entry in state.documents.iter() {
-        for symbol in &entry.value().symbol_table.symbols {
+        let doc = entry.value();
+        let source = doc.source();
+        for symbol in &doc.symbol_table.symbols {
             let AlSymbolKind::Object(kind) = symbol.kind else {
                 continue;
             };
@@ -637,9 +715,16 @@ fn find_table_field_enum_type(
                 }
 
                 let type_info = child.type_info.as_deref()?;
-                let (object_kind, enum_name) = extract_type_object_name(type_info)?;
-                if object_kind.eq_ignore_ascii_case("enum") {
-                    return Some(enum_name.to_string());
+                return Some(type_info.to_string());
+            }
+
+            let object_start = symbol.start_byte.min(source.len());
+            let object_end = symbol.end_byte.min(source.len());
+            if object_start < object_end {
+                let object_text = &source[object_start..object_end];
+                if let Some(type_info) = find_table_field_type_in_object_text(object_text, field_name)
+                {
+                    return Some(type_info);
                 }
             }
         }
@@ -977,6 +1062,12 @@ fn find_object_member_type(
                     return Some(type_info.to_string());
                 }
             }
+
+            if !require_procedure && object_kind.eq_ignore_ascii_case("table") {
+                if let Some(type_info) = find_table_field_type(state, object_name, member_name) {
+                    return Some(type_info);
+                }
+            }
         }
     }
     None
@@ -1027,6 +1118,7 @@ fn builtin_record_methods() -> &'static [&'static str] {
         "SetRange",
         "SetRecFilter",
         "TableCaption",
+        "TableName",
         "TestField",
         "TransferFields",
         "Validate",
@@ -1038,7 +1130,16 @@ fn builtin_codeunit_methods() -> &'static [&'static str] {
 }
 
 fn builtin_page_methods() -> &'static [&'static str] {
-    &["Run", "RunModal", "SetRecord", "GetRecord", "Update", "Close"]
+    &[
+        "Run",
+        "RunModal",
+        "SetRecord",
+        "GetRecord",
+        "Update",
+        "Close",
+        "SetTableView",
+        "LookupMode",
+    ]
 }
 
 fn builtin_report_methods() -> &'static [&'static str] {
@@ -1060,6 +1161,10 @@ fn builtin_xmlport_methods() -> &'static [&'static str] {
 
 fn builtin_query_methods() -> &'static [&'static str] {
     &["Open", "Read", "Close", "SaveAsXml", "SetFilter"]
+}
+
+fn builtin_enum_methods() -> &'static [&'static str] {
+    &["Names", "Ordinals"]
 }
 
 fn builtin_list_methods() -> &'static [&'static str] {
@@ -1100,6 +1205,7 @@ fn builtin_methods_for_object_kind(object_kind: &str) -> Option<&'static [&'stat
         "report" | "report_builtin" => Some(builtin_report_methods()),
         "xmlport" | "xmlport_builtin" => Some(builtin_xmlport_methods()),
         "query" | "query_builtin" => Some(builtin_query_methods()),
+        "enum" | "enum_builtin" => Some(builtin_enum_methods()),
         "list" => Some(builtin_list_methods()),
         "dictionary" => Some(builtin_dictionary_methods()),
         "codeunit_builtin" => Some(builtin_codeunit_methods()),
@@ -1849,6 +1955,41 @@ codeunit 50100 Test
     }
 
     #[test]
+    fn test_completion_dot_record_includes_tablename() {
+        let source = r#"table 18 Customer
+{
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.Tab
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Cust.Tab");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "TableName"),
+            "expected built-in Record method TableName, got: {labels:?}"
+        );
+    }
+
+    #[test]
     fn test_completion_dot_list_includes_builtin_methods() {
         let source = r#"codeunit 50100 Test
 {
@@ -2098,7 +2239,8 @@ codeunit 50100 Test
             .documents
             .insert(uri.clone(), DocumentState::new(source).unwrap());
 
-        let params = make_completion_params(uri, 4, 13);
+        let (line, character) = cursor_after(source, "PAGE.");
+        let params = make_completion_params(uri, line, character);
         let result = handle_completion(&state, params);
         assert!(result.is_some(), "expected completion result");
         let labels: Vec<String> = items_from(result.unwrap())
@@ -2108,6 +2250,80 @@ codeunit 50100 Test
         assert!(
             labels.iter().any(|l| l == "RunModal"),
             "expected PAGE built-in RunModal method, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_page_builtin_settableview_and_lookupmode() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        PAGE.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "PAGE.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "SetTableView"),
+            "expected PAGE built-in SetTableView method, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "LookupMode"),
+            "expected PAGE built-in LookupMode method, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_enum_builtin_names_and_ordinals() {
+        let source = r#"enum 50100 "Dummy State"
+{
+    value(0; Open) { }
+    value(1; Closed) { }
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        CurrentState: Enum "Dummy State";
+    begin
+        CurrentState.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "CurrentState.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Names"),
+            "expected Enum built-in Names member, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Ordinals"),
+            "expected Enum built-in Ordinals member, got: {labels:?}"
         );
     }
 
@@ -2328,6 +2544,76 @@ codeunit 50100 Test
         assert!(
             labels.iter().any(|l| l == "Invoice"),
             "expected Invoice enum value in completion, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_enum_values_for_record_field_with_slash_after_tablerelation_if_else() {
+        let enum_source = r#"enum 50100 "Dummy KDS-Trigger Sends"
+{
+    value(0; "On Item Added")
+    {
+    }
+    value(1; Manual)
+    {
+    }
+}"#;
+        let table_source = r#"table 50100 "Dummy Hospitality Type"
+{
+    fields
+    {
+        field(8; "Dining Area ID"; Code[20])
+        {
+            TableRelation = IF ("Access To Other Restaurant" = FILTER('')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Restaurant No."))
+            ELSE
+            IF ("Access To Other Restaurant" = FILTER(<> '')) "Dummy Dining Area".ID WHERE("Restaurant No." = FIELD("Access To Other Restaurant"));
+        }
+        field(9; "Access To Other Restaurant"; Code[20]) { }
+        field(10; "KDS Display/Printing"; Enum "Dummy KDS-Trigger Sends") { }
+        field(11; "Restaurant No."; Code[20]) { }
+    }
+}"#;
+        let codeunit_source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        HospType: Record "Dummy Hospitality Type";
+    begin
+        HospType."KDS Display/Printing"::;
+    end;
+}"#;
+
+        let enum_uri = Url::parse("file:///test/enum.al").unwrap();
+        let table_uri = Url::parse("file:///test/table.al").unwrap();
+        let codeunit_uri = Url::parse("file:///test/test.al").unwrap();
+
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(enum_uri, DocumentState::new(enum_source).unwrap());
+        state
+            .documents
+            .insert(table_uri, DocumentState::new(table_source).unwrap());
+        state.documents.insert(
+            codeunit_uri.clone(),
+            DocumentState::new(codeunit_source).unwrap(),
+        );
+
+        let (line, character) = cursor_after(codeunit_source, "\"KDS Display/Printing\"::");
+        let params = make_completion_params(codeunit_uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "On Item Added"),
+            "expected enum value completion for quoted field with slash, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Manual"),
+            "expected second enum value completion, got: {labels:?}"
         );
     }
 
