@@ -189,13 +189,13 @@ fn extract_procedure_action(
     let mut cursor = body.walk();
     for child in body.named_children(&mut cursor) {
         // A statement is any named child of the block (except begin/end keywords)
-        if child.kind().ends_with("_statement")
+        if (child.kind().ends_with("_statement")
             || child.kind() == "function_call"
-            || child.kind() == "method_call"
+            || child.kind() == "method_call")
+            && child.start_byte() >= start_offset
+            && child.end_byte() <= end_offset
         {
-            if child.start_byte() >= start_offset && child.end_byte() <= end_offset {
-                selected_statements.push(child);
-            }
+            selected_statements.push(child);
         }
     }
 

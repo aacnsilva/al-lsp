@@ -722,7 +722,8 @@ pub(crate) fn find_table_field_type(
             let object_end = symbol.end_byte.min(source.len());
             if object_start < object_end {
                 let object_text = &source[object_start..object_end];
-                if let Some(type_info) = find_table_field_type_in_object_text(object_text, field_name)
+                if let Some(type_info) =
+                    find_table_field_type_in_object_text(object_text, field_name)
                 {
                     return Some(type_info);
                 }
@@ -1169,17 +1170,8 @@ fn builtin_enum_methods() -> &'static [&'static str] {
 
 fn builtin_list_methods() -> &'static [&'static str] {
     &[
-        "Add",
-        "AddRange",
-        "Contains",
-        "Count",
-        "Get",
-        "GetRange",
-        "IndexOf",
-        "Insert",
-        "Remove",
-        "RemoveAt",
-        "Set",
+        "Add", "AddRange", "Contains", "Count", "Get", "GetRange", "IndexOf", "Insert", "Remove",
+        "RemoveAt", "Set",
     ]
 }
 
@@ -1576,11 +1568,7 @@ fn enum_context_from_qualifier_node(
 fn unwrap_primary_expression(mut node: tree_sitter::Node<'_>) -> tree_sitter::Node<'_> {
     while node.kind() == "primary_expression" {
         let mut cursor = node.walk();
-        let mut next = None;
-        for child in node.named_children(&mut cursor) {
-            next = Some(child);
-            break;
-        }
+        let next = node.named_children(&mut cursor).next();
         match next {
             Some(child) => node = child,
             None => break,
@@ -2097,7 +2085,10 @@ codeunit 50100 Test
         assert_eq!(source_text.as_bytes()[byte_offset - 1], b'.');
         assert_eq!(
             parse_object_before_trailing_dot(&source_text, byte_offset),
-            Some((source_text.find("HelperFunc.").unwrap(), "HelperFunc".to_string()))
+            Some((
+                source_text.find("HelperFunc.").unwrap(),
+                "HelperFunc".to_string()
+            ))
         );
         assert_eq!(
             resolve_object_type_from_symbol_name(

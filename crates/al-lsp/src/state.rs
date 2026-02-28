@@ -55,7 +55,10 @@ impl WorldState {
             let AlSymbolKind::Object(kind) = object.kind else {
                 continue;
             };
-            let key = (kind.label().to_ascii_lowercase(), object.name.to_ascii_lowercase());
+            let key = (
+                kind.label().to_ascii_lowercase(),
+                object.name.to_ascii_lowercase(),
+            );
             self.object_index
                 .entry(key)
                 .or_default()
@@ -215,10 +218,9 @@ impl WorldState {
                 .and_then(|e| e.to_str())
                 .map(|e| e.eq_ignore_ascii_case("al"))
                 == Some(true)
+                && self.load_file(&path)
             {
-                if self.load_file(&path) {
-                    count += 1;
-                }
+                count += 1;
             }
         }
         count

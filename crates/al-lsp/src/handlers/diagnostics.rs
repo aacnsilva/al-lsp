@@ -6,8 +6,8 @@ use al_syntax::ast::{extract_name, node_text, AlObjectKind, AlSymbol, AlSymbolKi
 use al_syntax::document::DocumentState;
 use al_syntax::navigation::node_at_offset;
 
-use crate::state::WorldState;
 use crate::handlers::completion::resolve_object_type_from_expression;
+use crate::state::WorldState;
 
 pub async fn publish_diagnostics(
     client: &Client,
@@ -36,10 +36,12 @@ fn collect_semantic_member_diagnostics(
     }
 
     let mut object_member_lookup_cache: ObjectMemberLookupCache = HashMap::new();
+    let mut table_field_lookup_cache: TableFieldLookupCache = HashMap::new();
     let mut diagnostics = Vec::new();
     collect_member_diagnostics_recursive(
         state,
         &mut object_member_lookup_cache,
+        &mut table_field_lookup_cache,
         caller_uri,
         doc,
         &source,
@@ -49,9 +51,11 @@ fn collect_semantic_member_diagnostics(
     diagnostics
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_member_diagnostics_recursive(
     state: &WorldState,
     object_member_lookup_cache: &mut ObjectMemberLookupCache,
+    table_field_lookup_cache: &mut TableFieldLookupCache,
     caller_uri: &Url,
     doc: &DocumentState,
     source: &str,
@@ -67,6 +71,7 @@ fn collect_member_diagnostics_recursive(
                 validate_member_access(
                     state,
                     object_member_lookup_cache,
+                    table_field_lookup_cache,
                     caller_uri,
                     doc,
                     source,
@@ -86,6 +91,7 @@ fn collect_member_diagnostics_recursive(
                 validate_member_access(
                     state,
                     object_member_lookup_cache,
+                    table_field_lookup_cache,
                     caller_uri,
                     doc,
                     source,
@@ -105,6 +111,7 @@ fn collect_member_diagnostics_recursive(
         collect_member_diagnostics_recursive(
             state,
             object_member_lookup_cache,
+            table_field_lookup_cache,
             caller_uri,
             doc,
             source,
@@ -142,6 +149,7 @@ struct ObjectDeclEntry {
 }
 
 type ObjectMemberLookupCache = HashMap<(String, String), Option<Vec<ObjectDeclEntry>>>;
+type TableFieldLookupCache = HashMap<(String, String), bool>;
 
 #[derive(Debug, Clone)]
 struct ObjectContext {
@@ -203,7 +211,7 @@ fn resolve_object_entries(
                 continue;
             }
 
-            entries.push(build_object_decl_entry(&uri, &target_doc, object));
+            entries.push(build_object_decl_entry(&uri, target_doc, object));
         }
     }
 
@@ -223,9 +231,18 @@ fn is_simple_identifier_name(name: &str) -> bool {
 
 fn table_field_declared_in_source(
     state: &WorldState,
+    cache: &mut TableFieldLookupCache,
     table_name: &str,
     field_name: &str,
 ) -> bool {
+    let key = (
+        table_name.to_ascii_lowercase(),
+        field_name.to_ascii_lowercase(),
+    );
+    if let Some(found) = cache.get(&key) {
+        return *found;
+    }
+
     for entry in state.documents.iter() {
         let doc = entry.value();
         let source = doc.source();
@@ -243,22 +260,26 @@ fn table_field_declared_in_source(
                 continue;
             }
             let object_text = &source[start..end];
+            let object_text_lower = object_text.to_ascii_lowercase();
 
             // Common AL form: field(<id>; "<Field Name>"; <Type>)
-            let quoted_pattern = format!("; \"{}\";", field_name);
-            if object_text.contains(&quoted_pattern) {
+            let quoted_pattern = format!("; \"{}\";", field_name.to_ascii_lowercase());
+            if object_text_lower.contains(&quoted_pattern) {
+                cache.insert(key, true);
                 return true;
             }
 
             // Unquoted identifier field name.
             if is_simple_identifier_name(field_name) {
-                let bare_pattern = format!("; {};", field_name);
-                if object_text.contains(&bare_pattern) {
+                let bare_pattern = format!("; {};", field_name.to_ascii_lowercase());
+                if object_text_lower.contains(&bare_pattern) {
+                    cache.insert(key, true);
                     return true;
                 }
             }
         }
     }
+    cache.insert(key, false);
     false
 }
 
@@ -292,9 +313,11 @@ fn build_object_decl_entry(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_member_access(
     state: &WorldState,
     object_member_lookup_cache: &mut ObjectMemberLookupCache,
+    table_field_lookup_cache: &mut TableFieldLookupCache,
     caller_uri: &Url,
     doc: &DocumentState,
     source: &str,
@@ -313,14 +336,9 @@ fn validate_member_access(
 
     let member_name = extract_name(member_node, source);
 
-    let Some((target_kind, target_object_name)) = resolve_object_type_from_expression(
-        state,
-        doc,
-        source,
-        object_node,
-        scope_byte,
-        0,
-    ) else {
+    let Some((target_kind, target_object_name)) =
+        resolve_object_type_from_expression(state, doc, source, object_node, scope_byte, 0)
+    else {
         return;
     };
 
@@ -373,7 +391,12 @@ fn validate_member_access(
     if matching_members.is_empty() {
         if !is_method_call
             && target_kind.eq_ignore_ascii_case("table")
-            && table_field_declared_in_source(state, &target_object_name, &member_name)
+            && table_field_declared_in_source(
+                state,
+                table_field_lookup_cache,
+                &target_object_name,
+                &member_name,
+            )
         {
             return;
         }
@@ -455,11 +478,7 @@ fn validate_member_access(
 fn unwrap_primary_expression(mut node: tree_sitter::Node<'_>) -> tree_sitter::Node<'_> {
     while node.kind() == "primary_expression" {
         let mut cursor = node.walk();
-        let mut first_named = None;
-        for child in node.named_children(&mut cursor) {
-            first_named = Some(child);
-            break;
-        }
+        let first_named = node.named_children(&mut cursor).next();
         let Some(child) = first_named else {
             break;
         };
@@ -1127,10 +1146,58 @@ codeunit 50100 Test
         let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
         assert!(
             !diags.iter().any(|d| {
-                d.message.contains("Display/Printing Mode")
-                    || d.message.contains("Service Flow ID")
+                d.message.contains("Display/Printing Mode") || d.message.contains("Service Flow ID")
             }),
             "did not expect diagnostics for valid quoted fields, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_diagnostics_for_tablerelation_member_where_with_consts() {
+        let source = r#"table 50100 "Dummy Setup"
+{
+    fields
+    {
+        field(20; "Restaurant No."; Code[20]) { }
+        field(21; "After Posting"; Option)
+        {
+            OptionMembers = "Return","Stay";
+        }
+        field(22; "Income Acc. 1"; Code[20])
+        {
+            Caption = 'Income Acc. 1';
+            TableRelation = "Dummy Income/Expense Account"."No." WHERE("Store No." = FIELD("Restaurant No."),
+                                                                        "Account Type" = CONST(Income),
+                                                                        "Gratuity Type" = CONST(Tips));
+            ToolTip = 'Account used for income type 1.';
+        }
+        field(23; "Income Acc. 2"; Code[20])
+        {
+            Caption = 'Income Acc. 2';
+            TableRelation = "Dummy Income/Expense Account"."No." WHERE("Store No." = FIELD("Restaurant No."),
+                                                                        "Account Type" = CONST(Income),
+                                                                        "Gratuity Type" = CONST(Tips));
+            ToolTip = 'Account used for income type 2.';
+        }
+    }
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let doc = state.documents.get(&uri).unwrap();
+        assert!(
+            doc.diagnostics.is_empty(),
+            "did not expect syntax diagnostics for valid TableRelation WHERE CONST syntax, got: {:?}",
+            doc.diagnostics
+        );
+
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            diags.is_empty(),
+            "did not expect semantic diagnostics for valid TableRelation member/WHERE syntax, got: {diags:?}"
         );
     }
 
@@ -1168,8 +1235,7 @@ codeunit 50100 Test
         let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
         assert!(
             !diags.iter().any(|d| {
-                d.message.contains("Display/Printing Mode")
-                    || d.message.contains("On Item Added")
+                d.message.contains("Display/Printing Mode") || d.message.contains("On Item Added")
             }),
             "did not expect diagnostics for Record.EnumField::EnumValue access, got: {diags:?}"
         );
@@ -1248,9 +1314,9 @@ codeunit 50100 Test
         let doc = state.documents.get(&uri).unwrap();
         let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
         assert!(
-            !diags
-                .iter()
-                .any(|d| d.message.contains("Open") || d.message.contains("Read") || d.message.contains("Close")),
+            !diags.iter().any(|d| d.message.contains("Open")
+                || d.message.contains("Read")
+                || d.message.contains("Close")),
             "did not expect diagnostics for built-in Query methods, got: {diags:?}"
         );
     }

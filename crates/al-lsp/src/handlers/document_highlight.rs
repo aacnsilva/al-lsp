@@ -2,7 +2,7 @@ use lsp_types::{DocumentHighlight, DocumentHighlightKind, DocumentHighlightParam
 
 use al_syntax::navigation::find_all_references;
 
-use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
+use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range_utf16};
 use crate::state::WorldState;
 
 pub fn handle_document_highlight(
@@ -26,7 +26,7 @@ pub fn handle_document_highlight(
     let highlights: Vec<DocumentHighlight> = refs
         .into_iter()
         .map(|(start, end)| {
-            let range = ts_range_to_lsp_range(start, end);
+            let range = ts_range_to_lsp_range_utf16(&doc.rope, start, end);
             // Classify as Write if the node is on the left side of an assignment.
             // For simplicity, we mark all as Read — a more precise classification
             // would require checking the parent node type at each reference site.

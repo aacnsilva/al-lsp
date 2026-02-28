@@ -290,8 +290,7 @@ codeunit 50100 Test
             DocumentState::new(codeunit_source).unwrap(),
         );
 
-        let (line, character) =
-            cursor_on(codeunit_source, "\"KDS Display/Printing\" = HospType");
+        let (line, character) = cursor_on(codeunit_source, "\"KDS Display/Printing\" = HospType");
         let params = make_hover_params(codeunit_uri, line, character + 1);
         let hover = handle_hover(&state, params);
         assert!(hover.is_some(), "expected hover result");

@@ -323,10 +323,7 @@ pub fn find_call_context<'a>(
         if kind == "function_call" || kind == "method_call" {
             break;
         }
-        node = match node.parent() {
-            Some(p) => p,
-            None => return None,
-        };
+        node = node.parent()?;
     }
 
     // Find the function name
@@ -426,7 +423,10 @@ pub fn extract_type_object_name(type_info: &str) -> Option<(&'static str, &str)>
     if type_info.to_ascii_lowercase().starts_with("list of [") {
         return Some(("list", "List"));
     }
-    if type_info.to_ascii_lowercase().starts_with("dictionary of [") {
+    if type_info
+        .to_ascii_lowercase()
+        .starts_with("dictionary of [")
+    {
         return Some(("dictionary", "Dictionary"));
     }
 
@@ -882,11 +882,7 @@ fn resolve_object_type_info<'a>(
 fn unwrap_primary_expression(mut node: Node<'_>) -> Node<'_> {
     while node.kind() == "primary_expression" {
         let mut cursor = node.walk();
-        let mut first_named = None;
-        for child in node.named_children(&mut cursor) {
-            first_named = Some(child);
-            break;
-        }
+        let first_named = node.named_children(&mut cursor).next();
         let Some(child) = first_named else {
             break;
         };
@@ -1271,7 +1267,10 @@ codeunit 50100 Test
         let ctx = codeunit_method_call_at_offset(&tree, source, &table, offset);
         assert_eq!(
             ctx,
-            Some(("CompanyAddressProvider2".to_string(), "HelloWorld2".to_string()))
+            Some((
+                "CompanyAddressProvider2".to_string(),
+                "HelloWorld2".to_string()
+            ))
         );
     }
 
@@ -1322,8 +1321,13 @@ codeunit 50100 Test
         let symbols = extract_symbols(&tree, source);
         let table = DocumentSymbolTable::new(symbols);
 
-        let calls =
-            find_codeunit_method_calls(&tree, source, &table, "CompanyAddressProvider2", "HelloWorld2");
+        let calls = find_codeunit_method_calls(
+            &tree,
+            source,
+            &table,
+            "CompanyAddressProvider2",
+            "HelloWorld2",
+        );
         assert_eq!(calls.len(), 1, "expected one codeunit call, got {calls:?}");
     }
 }

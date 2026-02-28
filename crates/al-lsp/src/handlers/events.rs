@@ -315,9 +315,7 @@ pub(crate) fn event_subscriber_completion_items(
             }
         }
         1 => {
-            let Some(object_kind) = ctx.object_kind.as_deref() else {
-                return None;
-            };
+            let object_kind = ctx.object_kind.as_deref()?;
             let mut items = Vec::new();
             let mut seen = HashSet::new();
 

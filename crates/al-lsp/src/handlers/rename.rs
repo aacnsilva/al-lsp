@@ -565,13 +565,13 @@ mod tests {
 
         // Should have edits in the interface document
         assert!(
-            changes.get(&iface_uri).is_some(),
+            changes.contains_key(&iface_uri),
             "expected edits in interface document"
         );
 
         // Should have edits in the implementation document
         assert!(
-            changes.get(&impl_uri).is_some(),
+            changes.contains_key(&impl_uri),
             "expected edits in implementation document"
         );
     }

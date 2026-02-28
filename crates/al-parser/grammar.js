@@ -221,7 +221,9 @@ module.exports = grammar({
         $.quoted_identifier,
         // Handle cases where keywords are tokenized as a prefix of property names
         // (e.g. `TableRelation` -> `Table` + `Relation`).
-        seq(kw("table"), $.identifier)
+        seq(kw("table"), $.identifier),
+        // Handle `ToolTip` tokenized as `to` + `olTip`.
+        seq(kw("to"), $.identifier)
       ),
 
     _property_value: ($) =>

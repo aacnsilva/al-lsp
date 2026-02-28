@@ -6,12 +6,12 @@ A Language Server Protocol (LSP) implementation for the AL programming language 
 
 | Feature | Description |
 |---|---|
-| **Go to Definition** | Navigate to symbol declarations. Jumps from implementing procedures to interface method definitions. Cross-document. |
+| **Go to Definition** | Navigate to symbol declarations. Supports cross-document object/type/member navigation, implementation procedure -> interface method, qualified enum values, and `TableRelation` targets (table + related field). |
 | **Go to Implementation** | From an interface method to all implementing codeunit procedures across open documents. |
 | **Go to Type Definition** | Resolves variable types to their object declarations (Record, Codeunit, Page, etc.). |
 | **Find References** | Scope-aware, cross-document. Supports interface methods, implementation procedures, and interface-typed method calls. Respects shadowing. |
-| **Hover** | Displays symbol kind, name, and type. |
-| **Completion** | Triggered by `.`. Offers scoped symbols and 47 AL keywords with type info. |
+| **Hover** | Displays symbol kind/name/type, including qualified enum values and inferred record field types when symbol metadata is incomplete. |
+| **Completion** | Triggered by `.` and `::`. Includes scoped symbols, enum values (`Enum::Value` and `Rec."Enum Field"::Value`), and `TableRelation`/`WHERE` value expression contexts. |
 | **Signature Help** | Triggered by `(` and `,`. Shows procedure signatures with active parameter tracking. |
 | **Document Symbols** | Nested hierarchical view (objects > procedures > variables). |
 | **Workspace Symbol** | Search across all open documents. Case-insensitive substring matching. |
@@ -19,7 +19,7 @@ A Language Server Protocol (LSP) implementation for the AL programming language 
 | **Document Highlight** | Highlights all references to the symbol under cursor within the same document. |
 | **Document Formatting** | CST-based formatter with proper indentation, operator spacing, and blank line management. |
 | **Folding Ranges** | Folds objects, procedures, triggers, var sections, control flow blocks, and block comments. |
-| **Diagnostics** | Reports syntax errors from the tree-sitter parser (ERROR and MISSING nodes). |
+| **Diagnostics** | Reports parser errors (`ERROR`/`MISSING`) plus semantic member diagnostics (unknown members, accessibility checks) with AL-aware fallbacks for common valid syntax patterns. |
 
 ## Project Structure
 
@@ -36,7 +36,7 @@ al-lsp/
 
 ### Crates
 
-**al-parser** — Custom tree-sitter grammar supporting all 13 AL object types, procedures, triggers, control flow statements (if/case/for/while/repeat/with), compound assignment operators (`+=`, `-=`, `*=`, `/=`), and the full AL expression grammar. All keywords are case-insensitive.
+**al-parser** — Custom tree-sitter grammar supporting all 13 AL object types, procedures, triggers, control flow statements (if/case/for/while/repeat/with), compound assignment operators (`+=`, `-=`, `*=`, `/=`), full AL expression grammar, `in` ranges (`A .. B`), `TableRelation` (including `IF/ELSE` and `WHERE(...)`), and `CalcFormula` expressions. All keywords are case-insensitive.
 
 **al-syntax** — Higher-level analysis layer built on the parser:
 - `ast` — Symbol tree extraction from parse trees (objects, procedures, variables, fields, etc.)
@@ -84,7 +84,7 @@ cargo test
 This runs tests across all three crates:
 - **al-parser** — Grammar correctness tests (object types, procedures, statements, expressions)
 - **al-syntax** — Symbol extraction, navigation, reference finding, formatting
-- **al-lsp** — LSP handler integration tests (go-to-definition, go-to-implementation, references)
+- **al-lsp** — LSP handler integration tests (go-to-definition, go-to-implementation, references, hover, completion, diagnostics)
 
 ## VS Code Extension
 
@@ -152,7 +152,11 @@ codeunit 50100 "My Codeunit"
 
 ### Expressions
 
-Logical (`or`, `xor`, `and`, `not`), comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`), arithmetic (`+`, `-`, `*`, `/`, `mod`, `div`), method calls, member access, array access, qualified enum values (`Enum::Value`), string/integer/decimal/boolean literals
+Logical (`or`, `xor`, `and`, `not`), comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`, `in`), intervals (`..`), arithmetic (`+`, `-`, `*`, `/`, `mod`, `div`), method calls, member access, array access, qualified enum values (`Enum::Value` and `Rec."Enum Field"::Value`), string/integer/decimal/boolean/temporal literals
+
+### Property Expressions
+
+`TableRelation` (simple table target, table field target, `WHERE(...)`, nested `IF/ELSE`), `CalcFormula`, `DataItemLink`, `DataItemTableView` (`SORTING`, `ORDER`, `WHERE`)
 
 ### Type References
 

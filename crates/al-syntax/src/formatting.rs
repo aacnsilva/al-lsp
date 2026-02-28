@@ -181,9 +181,7 @@ fn assign_indentation(
             let child_line = child.start_position().row;
             let child_kind = child.kind();
             // Children on the same line as the object keyword (id, name, implements_clause)
-            if child_line == start_line {
-                assign_indentation(child, source, levels, join_to_prev, remove_line, depth);
-            } else if child_kind == "{" || child_kind == "}" {
+            if child_line == start_line || child_kind == "{" || child_kind == "}" {
                 assign_indentation(child, source, levels, join_to_prev, remove_line, depth);
             } else {
                 // Body members: procedures, triggers, properties, sections
@@ -216,9 +214,7 @@ fn assign_indentation(
         for child in node.children(&mut cursor) {
             let child_line = child.start_position().row;
             let child_kind = child.kind();
-            if child_line == start_line {
-                assign_indentation(child, source, levels, join_to_prev, remove_line, depth);
-            } else if child_kind == "{" || child_kind == "}" {
+            if child_line == start_line || child_kind == "{" || child_kind == "}" {
                 assign_indentation(child, source, levels, join_to_prev, remove_line, depth);
             } else {
                 assign_indentation(child, source, levels, join_to_prev, remove_line, depth + 1);

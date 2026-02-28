@@ -3,7 +3,7 @@ use lsp_types::{
 };
 use tower_lsp::Client;
 
-use al_syntax::document::DocumentState;
+use al_syntax::document::{DocumentState, IncrementalEdit};
 
 use crate::state::WorldState;
 
@@ -41,33 +41,33 @@ pub async fn handle_did_change(
                 if let Some(range) = change.range {
                     let start_offset = offset_from_position(&doc.rope, range.start);
                     let end_offset = offset_from_position(&doc.rope, range.end);
-                    if let (Some(start), Some(end)) = (start_offset, end_offset) {
-                        let start_point = tree_sitter::Point {
-                            row: range.start.line as usize,
-                            column: range.start.character as usize,
-                        };
-                        let old_end_point = tree_sitter::Point {
-                            row: range.end.line as usize,
-                            column: range.end.character as usize,
-                        };
+                    let start_point = point_from_position(&doc.rope, range.start);
+                    let old_end_point = point_from_position(&doc.rope, range.end);
+                    if let (Some(start), Some(end), Some(start_point), Some(old_end_point)) =
+                        (start_offset, end_offset, start_point, old_end_point)
+                    {
                         let new_end_point = advance_point_by_text(start_point, &change.text);
-                        let new_end_byte = start + change.text.len();
-
-                        doc.apply_edit(
-                            start,
-                            end,
-                            new_end_byte,
+                        doc.apply_edit(IncrementalEdit {
+                            start_byte: start,
+                            old_end_byte: end,
                             start_point,
                             old_end_point,
                             new_end_point,
-                            &change.text,
-                        );
+                            new_text: &change.text,
+                        });
                     } else {
-                        // Fallback: if offsets cannot be computed, do a full reparse.
+                        // Fallback: apply best-effort range replacement and do a full reparse.
                         let mut source = doc.source();
-                        if let (Some(start), Some(end)) = (start_offset, end_offset) {
-                            source.replace_range(start..end, &change.text);
+                        let start = start_offset
+                            .unwrap_or_else(|| offset_from_position_clamped(&doc.rope, range.start))
+                            .min(source.len());
+                        let mut end = end_offset
+                            .unwrap_or_else(|| offset_from_position_clamped(&doc.rope, range.end))
+                            .min(source.len());
+                        if end < start {
+                            end = start;
                         }
+                        source.replace_range(start..end, &change.text);
                         doc.reparse_full(&source);
                     }
                 }
@@ -96,6 +96,33 @@ pub async fn handle_did_close(_state: &WorldState, params: DidCloseTextDocumentP
 
 fn offset_from_position(rope: &ropey::Rope, pos: lsp_types::Position) -> Option<usize> {
     crate::convert::lsp_position_to_byte_offset(rope, pos)
+}
+
+fn offset_from_position_clamped(rope: &ropey::Rope, pos: lsp_types::Position) -> usize {
+    if rope.len_lines() == 0 {
+        return 0;
+    }
+    let mut clamped = pos;
+    let max_line = rope.len_lines().saturating_sub(1) as u32;
+    if clamped.line > max_line {
+        clamped.line = max_line;
+        let line_idx = clamped.line as usize;
+        clamped.character = rope.line(line_idx).len_chars() as u32;
+    }
+    crate::convert::lsp_position_to_byte_offset(rope, clamped).unwrap_or(rope.len_bytes())
+}
+
+fn point_from_position(rope: &ropey::Rope, pos: lsp_types::Position) -> Option<tree_sitter::Point> {
+    let line = pos.line as usize;
+    if line >= rope.len_lines() {
+        return None;
+    }
+    let byte_offset = offset_from_position(rope, pos)?;
+    let line_start = rope.line_to_byte(line);
+    Some(tree_sitter::Point {
+        row: line,
+        column: byte_offset.saturating_sub(line_start),
+    })
 }
 
 fn advance_point_by_text(start: tree_sitter::Point, text: &str) -> tree_sitter::Point {

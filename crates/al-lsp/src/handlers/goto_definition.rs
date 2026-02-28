@@ -3,7 +3,7 @@ use tree_sitter::Point;
 
 use al_syntax::ast::{extract_name, AlSymbol, AlSymbolKind};
 use al_syntax::navigation::{
-    extract_type_object_name, identifier_context_at_offset, resolve_at_offset,
+    extract_type_object_name, identifier_context_at_offset, node_at_offset, resolve_at_offset,
 };
 
 use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
@@ -115,9 +115,7 @@ fn find_object_member_declarations(
                 });
             }
 
-            if !is_method_call
-                && kind.label().eq_ignore_ascii_case("table")
-                && !found_symbol_member
+            if !is_method_call && kind.label().eq_ignore_ascii_case("table") && !found_symbol_member
             {
                 if let Some(location) =
                     find_table_field_location(&uri, source.as_str(), symbol, member_name)
@@ -151,7 +149,10 @@ fn find_table_field_location(
     })
 }
 
-fn find_field_name_span_in_object_text(object_text: &str, field_name: &str) -> Option<(usize, usize)> {
+fn find_field_name_span_in_object_text(
+    object_text: &str,
+    field_name: &str,
+) -> Option<(usize, usize)> {
     let object_lower = object_text.to_ascii_lowercase();
     let bytes = object_text.as_bytes();
     let mut cursor = 0usize;
@@ -193,7 +194,9 @@ fn find_field_name_span_in_object_text(object_text: &str, field_name: &str) -> O
             name_end -= 1;
         }
 
-        if name_end > name_start && object_text[name_start..name_end].eq_ignore_ascii_case(field_name) {
+        if name_end > name_start
+            && object_text[name_start..name_end].eq_ignore_ascii_case(field_name)
+        {
             return Some((name_start, name_end));
         }
         cursor = field_kw_start + "field".len();
@@ -276,6 +279,136 @@ fn interface_target_from_implements_identifier(
         return Some(("interface", extract_name(node, source)));
     }
     None
+}
+
+#[derive(Debug, Clone)]
+enum TableRelationNavTarget {
+    Table(String),
+    TableField {
+        table_name: String,
+        field_name: String,
+    },
+}
+
+fn table_relation_nav_target_at_offset(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    byte_offset: usize,
+) -> Option<TableRelationNavTarget> {
+    let node = node_at_offset(tree, byte_offset)?;
+    if !matches!(node.kind(), "identifier" | "quoted_identifier") {
+        return None;
+    }
+
+    if let Some(target) = table_relation_nav_target_from_relation_expression(node, source) {
+        return Some(target);
+    }
+    table_relation_nav_target_from_property_value(node, source)
+}
+
+fn table_relation_nav_target_from_relation_expression(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+) -> Option<TableRelationNavTarget> {
+    let relation_target_expr = find_ancestor_of_kind(node, "table_relation_target_expression")?;
+    let relation_node = relation_target_expr.child_by_field_name("relation")?;
+    table_relation_nav_target_from_relation_node(node, relation_node, source)
+}
+
+fn table_relation_nav_target_from_property_value(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+) -> Option<TableRelationNavTarget> {
+    let property = find_ancestor_of_kind(node, "property")?;
+    let prop_name_node = property.child_by_field_name("name")?;
+    if !extract_name(prop_name_node, source).eq_ignore_ascii_case("TableRelation") {
+        return None;
+    }
+
+    let value_node = property.child_by_field_name("value")?;
+    if value_node.id() == node.id()
+        && matches!(value_node.kind(), "identifier" | "quoted_identifier")
+    {
+        return Some(TableRelationNavTarget::Table(extract_name(
+            value_node, source,
+        )));
+    }
+
+    if value_node.kind() == "member_access" {
+        return table_relation_nav_target_from_relation_node(node, value_node, source);
+    }
+
+    None
+}
+
+fn table_relation_nav_target_from_relation_node(
+    node: tree_sitter::Node<'_>,
+    relation_node: tree_sitter::Node<'_>,
+    source: &str,
+) -> Option<TableRelationNavTarget> {
+    match relation_node.kind() {
+        "identifier" | "quoted_identifier" => (relation_node.id() == node.id())
+            .then(|| TableRelationNavTarget::Table(extract_name(relation_node, source))),
+        "member_access" => {
+            let member_node = relation_node.child_by_field_name("member")?;
+            let object_node =
+                unwrap_primary_expression(relation_node.child_by_field_name("object")?);
+            let table_name = table_name_from_member_access_object(object_node, source)?;
+            if member_node.id() == node.id() {
+                return Some(TableRelationNavTarget::TableField {
+                    table_name,
+                    field_name: extract_name(member_node, source),
+                });
+            }
+
+            if matches!(object_node.kind(), "identifier" | "quoted_identifier")
+                && object_node.id() == node.id()
+            {
+                return Some(TableRelationNavTarget::Table(table_name));
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn table_name_from_member_access_object(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+) -> Option<String> {
+    let node = unwrap_primary_expression(node);
+    match node.kind() {
+        "identifier" | "quoted_identifier" => Some(extract_name(node, source)),
+        "member_access" => {
+            let object = node.child_by_field_name("object")?;
+            table_name_from_member_access_object(object, source)
+        }
+        _ => None,
+    }
+}
+
+fn unwrap_primary_expression(mut node: tree_sitter::Node<'_>) -> tree_sitter::Node<'_> {
+    while node.kind() == "primary_expression" {
+        let mut cursor = node.walk();
+        let next = node.named_children(&mut cursor).next();
+        match next {
+            Some(child) => node = child,
+            None => break,
+        }
+    }
+    node
+}
+
+fn find_ancestor_of_kind<'a>(
+    mut node: tree_sitter::Node<'a>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    loop {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        node = node.parent()?;
+    }
 }
 
 pub fn handle_goto_definition(
@@ -377,6 +510,41 @@ pub fn handle_goto_definition(
         doc
     };
     let source = doc.source();
+
+    if let Some(target) = table_relation_nav_target_at_offset(&doc.tree, &source, byte_offset) {
+        drop(doc);
+        match target {
+            TableRelationNavTarget::Table(table_name) => {
+                if let Some(resp) =
+                    to_definition_response(find_object_declarations(state, "table", &table_name))
+                {
+                    return Some(resp);
+                }
+            }
+            TableRelationNavTarget::TableField {
+                table_name,
+                field_name,
+            } => {
+                if let Some(resp) = to_definition_response(find_object_member_declarations(
+                    state,
+                    "table",
+                    &table_name,
+                    &field_name,
+                    false,
+                )) {
+                    return Some(resp);
+                }
+            }
+        }
+        let doc = state.documents.get(&uri)?;
+        let source = doc.source();
+        let resolved = resolve_at_offset(&doc.tree, &source, &doc.symbol_table, byte_offset)?;
+        let range = ts_range_to_lsp_range(resolved.symbol.start_point, resolved.symbol.end_point);
+        return Some(GotoDefinitionResponse::Scalar(Location {
+            uri: uri.clone(),
+            range,
+        }));
+    }
 
     if let Some(target) = member_access_target_at_offset(state, &doc, &source, byte_offset) {
         drop(doc);
@@ -1067,6 +1235,146 @@ codeunit 50100 Test
     }
 
     #[test]
+    fn test_goto_definition_tablerelation_table_target_from_member_access() {
+        let ref_table_source = r#"table 50100 "Dummy Ref"
+{
+    fields
+    {
+        field(1; "Target Code"; Code[20])
+        {
+            TableRelation = "Dummy Target"."No." WHERE("Blocked" = CONST(false));
+        }
+    }
+}"#;
+        let target_table_source = r#"table 50101 "Dummy Target"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; "Blocked"; Boolean) { }
+    }
+}"#;
+        let ref_uri = Url::parse("file:///test/ref-table.al").unwrap();
+        let target_uri = Url::parse("file:///test/target-table.al").unwrap();
+        let state = WorldState::new();
+        state.documents.insert(
+            ref_uri.clone(),
+            DocumentState::new(ref_table_source).unwrap(),
+        );
+        state.documents.insert(
+            target_uri.clone(),
+            DocumentState::new(target_table_source).unwrap(),
+        );
+
+        let (line, character) = cursor_on(ref_table_source, "\"Dummy Target\".\"No.\" WHERE");
+        let params = make_goto_params(ref_uri, line, character + 1);
+        let result = handle_goto_definition(&state, params);
+        assert!(
+            result.is_some(),
+            "expected goto-definition to return related table declaration"
+        );
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter()
+                .any(|l| l.uri == target_uri && l.range.start.line == 0),
+            "expected navigation to related table declaration, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_tablerelation_field_target_from_member_access() {
+        let ref_table_source = r#"table 50100 "Dummy Ref"
+{
+    fields
+    {
+        field(1; "Target Code"; Code[20])
+        {
+            TableRelation = "Dummy Target"."No." WHERE("Blocked" = CONST(false));
+        }
+    }
+}"#;
+        let target_table_source = r#"table 50101 "Dummy Target"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; "Blocked"; Boolean) { }
+    }
+}"#;
+        let ref_uri = Url::parse("file:///test/ref-table.al").unwrap();
+        let target_uri = Url::parse("file:///test/target-table.al").unwrap();
+        let state = WorldState::new();
+        state.documents.insert(
+            ref_uri.clone(),
+            DocumentState::new(ref_table_source).unwrap(),
+        );
+        state.documents.insert(
+            target_uri.clone(),
+            DocumentState::new(target_table_source).unwrap(),
+        );
+
+        let (line, character) = cursor_on(ref_table_source, "\"No.\" WHERE");
+        let params = make_goto_params(ref_uri, line, character + 1);
+        let result = handle_goto_definition(&state, params);
+        assert!(
+            result.is_some(),
+            "expected goto-definition to return related field declaration"
+        );
+        let locs = locations_from(result.unwrap());
+        let expected_line = target_table_source[..target_table_source.find("\"No.\"").unwrap()]
+            .bytes()
+            .filter(|&b| b == b'\n')
+            .count() as u32;
+        assert!(
+            locs.iter()
+                .any(|l| l.uri == target_uri && l.range.start.line == expected_line),
+            "expected navigation to related table field declaration, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_tablerelation_simple_table_value() {
+        let ref_table_source = r#"table 50100 "Dummy Ref"
+{
+    fields
+    {
+        field(1; "Config Code"; Code[20])
+        {
+            TableRelation = "Dummy Config";
+        }
+    }
+}"#;
+        let target_table_source = r#"table 50102 "Dummy Config"
+{
+}"#;
+        let ref_uri = Url::parse("file:///test/ref-table.al").unwrap();
+        let target_uri = Url::parse("file:///test/target-table.al").unwrap();
+        let state = WorldState::new();
+        state.documents.insert(
+            ref_uri.clone(),
+            DocumentState::new(ref_table_source).unwrap(),
+        );
+        state.documents.insert(
+            target_uri.clone(),
+            DocumentState::new(target_table_source).unwrap(),
+        );
+
+        let (line, character) = cursor_on(ref_table_source, "\"Dummy Config\"");
+        let params = make_goto_params(ref_uri, line, character + 1);
+        let result = handle_goto_definition(&state, params);
+        assert!(
+            result.is_some(),
+            "expected goto-definition to return related table declaration"
+        );
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter()
+                .any(|l| l.uri == target_uri && l.range.start.line == 0),
+            "expected navigation to related table declaration, got: {locs:?}"
+        );
+    }
+
+    #[test]
     fn test_goto_definition_record_slash_field_member_to_table_field_declaration() {
         let enum_source = r#"enum 50100 "Dummy Trigger Mode"
 {
@@ -1114,8 +1422,7 @@ codeunit 50100 Test
             DocumentState::new(codeunit_source).unwrap(),
         );
 
-        let (line, character) =
-            cursor_on(codeunit_source, "\"KDS Display/Printing\" = HospType");
+        let (line, character) = cursor_on(codeunit_source, "\"KDS Display/Printing\" = HospType");
         let params = make_goto_params(codeunit_uri, line, character + 1);
         let result = handle_goto_definition(&state, params);
         assert!(
@@ -1123,11 +1430,10 @@ codeunit 50100 Test
             "expected goto-definition to return table field declaration"
         );
 
-        let expected_line =
-            table_source[..table_source.find("\"KDS Display/Printing\"").unwrap()]
-                .bytes()
-                .filter(|&b| b == b'\n')
-                .count() as u32;
+        let expected_line = table_source[..table_source.find("\"KDS Display/Printing\"").unwrap()]
+            .bytes()
+            .filter(|&b| b == b'\n')
+            .count() as u32;
         let locs = locations_from(result.unwrap());
         assert!(
             locs.iter()

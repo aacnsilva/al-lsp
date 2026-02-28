@@ -587,6 +587,7 @@ codeunit 50100 Test
             TableRelation = "Dummy Income/Expense Account"."No." WHERE("Store No." = FIELD("Restaurant No."),
                                                                        "Account Type" = CONST(Income),
                                                                        "Gratuity Type" = CONST(Tips));
+            ToolTip = 'Account used for income type 1.';
         }
         field(23; "Income Account 2"; Code[20])
         {
@@ -594,6 +595,7 @@ codeunit 50100 Test
             TableRelation = "Dummy Income/Expense Account"."No." WHERE("Store No." = FIELD("Restaurant No."),
                                                                        "Account Type" = CONST(Income),
                                                                        "Gratuity Type" = CONST(Tips));
+            ToolTip = 'Account used for income type 2.';
         }
         field(24; "Restaurant No."; Code[20])
         {

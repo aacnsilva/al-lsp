@@ -14,6 +14,15 @@ pub struct DocumentState {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+pub struct IncrementalEdit<'a> {
+    pub start_byte: usize,
+    pub old_end_byte: usize,
+    pub start_point: tree_sitter::Point,
+    pub old_end_point: tree_sitter::Point,
+    pub new_end_point: tree_sitter::Point,
+    pub new_text: &'a str,
+}
+
 impl DocumentState {
     /// Create a new document state from full source text.
     pub fn new(source: &str) -> Option<Self> {
@@ -32,27 +41,25 @@ impl DocumentState {
     }
 
     /// Apply an incremental edit and re-parse.
-    pub fn apply_edit(
-        &mut self,
-        start_byte: usize,
-        old_end_byte: usize,
-        new_end_byte: usize,
-        start_point: tree_sitter::Point,
-        old_end_point: tree_sitter::Point,
-        new_end_point: tree_sitter::Point,
-        new_source: &str,
-    ) {
+    pub fn apply_edit(&mut self, edit: IncrementalEdit<'_>) {
+        let IncrementalEdit {
+            start_byte,
+            old_end_byte,
+            start_point,
+            old_end_point,
+            new_end_point,
+            new_text,
+        } = edit;
+        let new_end_byte = start_byte + new_text.len();
+
         // Update rope
         let start_char = self.rope.byte_to_char(start_byte);
         let old_end_char = self
             .rope
             .byte_to_char(old_end_byte.min(self.rope.len_bytes()));
         self.rope.remove(start_char..old_end_char);
-        let new_text_len = new_end_byte - start_byte;
-        if new_text_len > 0 {
-            // Extract the new text from the full new source
-            let insert_text = &new_source[..new_text_len.min(new_source.len())];
-            self.rope.insert(start_char, insert_text);
+        if !new_text.is_empty() {
+            self.rope.insert(start_char, new_text);
         }
 
         // Apply edit to tree for incremental parsing
