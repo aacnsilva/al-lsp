@@ -150,9 +150,8 @@ impl WorldState {
         false
     }
 
-    /// Scan workspace roots for `.al` files and load them into the document map.
-    /// Also loads `.al` files from `.app` archives in `.alpackages/`.
-    /// Skips files that are already loaded (e.g. opened via did_open).
+    /// Test helper that loads both workspace source files and `.alpackages`.
+    #[cfg(test)]
     pub fn load_workspace_files(&self) -> usize {
         self.load_workspace_source_files() + self.load_workspace_alpackages()
     }
