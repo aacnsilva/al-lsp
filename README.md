@@ -6,20 +6,20 @@ A Language Server Protocol (LSP) implementation for the AL programming language 
 
 | Feature | Description |
 |---|---|
-| **Go to Definition** | Navigate to symbol declarations. Supports cross-document object/type/member navigation, implementation procedure -> interface method, qualified enum values, and `TableRelation` targets (table + related field). |
+| **Go to Definition** | Navigate to symbol declarations. Supports cross-document object/type/member navigation, implementation procedure -> interface method, qualified enum values, `TableRelation` targets (table + related field), and page `usercontrol` calls into `controladdin` procedures. |
 | **Go to Implementation** | From an interface method to all implementing codeunit procedures across open documents. |
 | **Go to Type Definition** | Resolves variable types to their object declarations (Record, Codeunit, Page, etc.). |
 | **Find References** | Scope-aware, cross-document. Supports interface methods, implementation procedures, and interface-typed method calls. Respects shadowing. |
-| **Hover** | Displays symbol kind/name/type, including qualified enum values, inferred record field types, and built-in method signatures/summaries with Microsoft Learn links (covering the full AL runtime data-type method library list). |
-| **Completion** | Triggered by `.` and `::`. Includes scoped symbols, enum values (`Enum::Value` and `Rec."Enum Field"::Value`), `TableRelation`/`WHERE` value expression contexts, built-in method/property documentation, and chained built-in return-type inference (including no-`()` calls for zero-parameter methods). Built-in datatype methods are aligned with the Microsoft Learn AL method library tables. |
+| **Hover** | Displays symbol kind/name/type, including qualified enum values, inferred record field types, inline `Option` variable members, and built-in method signatures/summaries with Microsoft Learn links (covering the full AL runtime data-type method library list). |
+| **Completion** | Triggered by `.` and `::`. Includes scoped symbols, enum values (`Enum::Value` and `Rec."Enum Field"::Value`), inline `Option` variable values (`OptionVar::Value`), `TableRelation`/`WHERE` value expression contexts, record/table members, `controladdin` procedures through `CurrPage.<Control>.`, built-in method/property documentation, and chained built-in return-type inference (including no-`()` calls for zero-parameter methods). Built-in datatype methods are aligned with the Microsoft Learn AL method library tables. |
 | **Signature Help** | Triggered by `(` and `,`. Shows procedure signatures with active parameter tracking for both user-defined and built-in methods (including runtime data types from the AL method library). |
-| **Document Symbols** | Nested hierarchical view (objects > procedures > variables). |
+| **Document Symbols** | Nested hierarchical view (objects > procedures/triggers > parameters/variables, plus page `usercontrol` members and `controladdin` procedures/events). |
 | **Workspace Symbol** | Search across all open documents. Case-insensitive substring matching. |
 | **Rename** | Renames variables, parameters, procedures, and fields. Auto-quotes names with spaces. |
 | **Document Highlight** | Highlights all references to the symbol under cursor within the same document. |
 | **Document Formatting** | CST-based formatter with proper indentation, operator spacing, and blank line management. |
 | **Folding Ranges** | Folds objects, procedures, triggers, var sections, control flow blocks, and block comments. |
-| **Diagnostics** | Reports parser errors (`ERROR`/`MISSING`) plus semantic member diagnostics (unknown members, accessibility checks) with AL-aware fallbacks for common valid syntax patterns. |
+| **Diagnostics** | Reports parser errors (`ERROR`/`MISSING`) plus semantic member diagnostics (unknown members, accessibility checks) with AL-aware fallbacks for common valid syntax patterns, including no-`()` zero-parameter calls, trigger return values, inline `Option` declarations, and advanced `TableRelation` expressions. |
 
 ## Project Structure
 
@@ -36,7 +36,7 @@ al-lsp/
 
 ### Crates
 
-**al-parser** — Custom tree-sitter grammar supporting all 13 AL object types, procedures, triggers, control flow statements (if/case/for/while/repeat/with), compound assignment operators (`+=`, `-=`, `*=`, `/=`), full AL expression grammar, `in` ranges (`A .. B`), `TableRelation` (including `IF/ELSE` and `WHERE(...)`), and `CalcFormula` expressions. All keywords are case-insensitive.
+**al-parser** — Custom tree-sitter grammar supporting all 13 AL object types, procedures, triggers (including Boolean/named return values), control add-ins, page `usercontrol` sections, control flow statements (if/case/for/while/repeat/with), compound assignment operators (`+=`, `-=`, `*=`, `/=`), full AL expression grammar, `in` ranges (`A .. B`), `TableRelation` (including `IF/ELSE` and `WHERE(...)`), `CalcFormula`, `DecimalPlaces`, inline `Option` declarations, and no-`()` procedure invocations for zero-parameter calls. All keywords are case-insensitive.
 
 **al-syntax** — Higher-level analysis layer built on the parser:
 - `ast` — Symbol tree extraction from parse trees (objects, procedures, variables, fields, etc.)
@@ -46,7 +46,7 @@ al-lsp/
 - `diagnostics` — Syntax error detection
 - `document` — Per-file state management (rope text buffer, tree, symbol table)
 
-**al-lsp** — The LSP server. Communicates over stdin/stdout. Holds a `WorldState` with a concurrent map of all open documents.
+**al-lsp** — The LSP server. Communicates over stdin/stdout. Holds a `WorldState` with concurrent indexes for open documents and workspace objects. Startup indexing is phased so open-file features are available immediately while cross-file workspace indexing warms in the background.
 
 ## Building
 
@@ -82,9 +82,9 @@ cargo test
 ```
 
 This runs tests across all three crates:
-- **al-parser** — Grammar correctness tests (object types, procedures, statements, expressions)
-- **al-syntax** — Symbol extraction, navigation, reference finding, formatting
-- **al-lsp** — LSP handler integration tests (go-to-definition, go-to-implementation, references, hover, completion, diagnostics)
+- **al-parser** — Grammar correctness tests (object types, procedures, triggers, statements, expressions, property grammars)
+- **al-syntax** — Symbol extraction, navigation, reference finding, formatting, syntax diagnostics
+- **al-lsp** — LSP handler integration tests (go-to-definition, go-to-implementation, references, hover, completion, signature help, diagnostics)
 
 ## VS Code Extension
 
@@ -152,15 +152,22 @@ codeunit 50100 "My Codeunit"
 
 ### Expressions
 
-Logical (`or`, `xor`, `and`, `not`), comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`, `in`), intervals (`..`), arithmetic (`+`, `-`, `*`, `/`, `mod`, `div`), method calls, member access, array access, qualified enum values (`Enum::Value` and `Rec."Enum Field"::Value`), string/integer/decimal/boolean/temporal literals
+Logical (`or`, `xor`, `and`, `not`), comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`, `in`), intervals (`..`), arithmetic (`+`, `-`, `*`, `/`, `mod`, `div`), method calls, member access, array access, qualified enum values (`Enum::Value` and `Rec."Enum Field"::Value`), qualified inline `Option` values (`OptionVar::Value`), string/integer/decimal/boolean/temporal literals
 
 ### Property Expressions
 
-`TableRelation` (simple table target, table field target, `WHERE(...)`, nested `IF/ELSE`), `CalcFormula`, `DataItemLink`, `DataItemTableView` (`SORTING`, `ORDER`, `WHERE`)
+`TableRelation` (simple table target, table field target, `WHERE(...)`, nested `IF/ELSE`, `CONST`, `FILTER`, `FIELD`), `CalcFormula`, `DataItemLink`, `DataItemTableView` (`SORTING`, `ORDER`, `WHERE`), `DecimalPlaces`
 
 ### Type References
 
 `simple_type`, `sized_type` (e.g. `Code[20]`), `Record` (with optional `temporary`), `Enum`, `Interface`, `List of [Type]`, `Dictionary of [K, V]`, `array [N] of Type`, `Option`, `Label`, `DotNet`, and runtime method-heavy types such as `Text`/`SecretText`/`TextBuilder`/`TextConst`, `Any`/`Boolean`/`Byte`/`Integer`/`Decimal`/`BigInteger`, `Guid`, `Date`/`DateFormula`/`Time`/`DateTime`/`Duration`, `InStream`/`OutStream`, `JsonObject`/`JsonArray`/`JsonToken`/`JsonValue`, `HttpClient` family, `XmlDocument` family (`XmlAttributeCollection`, `XmlCData`, `XmlComment`, `XmlDeclaration`, `XmlDocumentType`, `XmlNamespaceManager`, `XmlNameTable`, `XmlProcessingInstruction`, `XmlReadOptions`, `XmlText`, `XmlWriteOptions`), `RecordId`, `Variant`, `ErrorInfo`, `SessionSettings`, `Notification`, `Dialog`, `Session`/`SessionInformation`, `Database`, `System`, `TaskScheduler`, `FilterPageBuilder`, `Blob`, `File`/`FileUpload`, `Version`, `NavApp`, `ModuleInfo`/`ModuleDependencyInfo`, `Media`/`MediaSet`, `NumberSequence`, `CompanyProperty`/`ProductName`/`IsolatedStorage`/`Cookie`/`DataTransfer`/`Debugger`/`RequestPage`/`WebServiceActionContext`, `TestPage`/`TestField`/`TestAction`/`TestRequestPage`/`TestPart`/`TestFilter`/`TestFilterField`/`TestHttpRequestMessage`/`TestHttpResponseMessage`, and `RecordRef`/`FieldRef`/`KeyRef`
+
+### Declaration Details
+
+- Procedures and triggers support both unnamed and named return values.
+- Zero-parameter procedure invocations without `()` are accepted where AL allows them.
+- Inline `Option` declarations are supported for globals, locals, and parameters, including empty first members.
+- Record variables resolve to record/table built-ins, fields, and accessible table procedures.
 
 ## License
 
