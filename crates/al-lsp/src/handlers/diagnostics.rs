@@ -1686,6 +1686,38 @@ codeunit 50101 Test
     }
 
     #[test]
+    fn test_no_semantic_diagnostic_for_global_inline_option_variable_usage() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option Alpha, "Bra-vo";
+
+    procedure Run()
+    var
+        I: Integer;
+    begin
+        Message('%1', GlobalChoice::Alpha);
+        I := GlobalChoice.AsInteger();
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("Alpha")
+                    || d.message.contains("AsInteger")
+                    || d.message.contains("Unknown member")
+            }),
+            "did not expect diagnostics for global inline option usage, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn test_no_semantic_diagnostic_for_additional_builtin_runtime_types() {
         let source = r#"codeunit 50100 Test
 {

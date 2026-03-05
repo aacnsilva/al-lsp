@@ -1026,6 +1026,37 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
     }
 
     #[test]
+    fn test_goto_definition_global_inline_option_value() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option Alpha, "Bra-vo";
+
+    procedure Run()
+    begin
+        Message('%1', GlobalChoice::Alpha);
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, mut character) = cursor_on(source, "GlobalChoice::Alpha");
+        character += "GlobalChoice::".len() as u32;
+        let result = handle_goto_definition(&state, make_goto_params(uri.clone(), line, character));
+        assert!(result.is_some(), "expected goto-definition result");
+
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter()
+                .any(|l| l.uri == uri && l.range.start.line == 3 && l.range.start.character >= 29),
+            "expected navigation to Alpha in global option declaration, got: {locs:?}"
+        );
+    }
+
+    #[test]
     fn test_goto_definition_record_variable_usage_to_table_cross_doc() {
         let table_source = r#"table 18 Customer
 {

@@ -8,7 +8,8 @@ use al_syntax::navigation::{
 
 use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
 use crate::handlers::completion::{
-    enum_value_target_at_offset, enum_value_usages_in_tree, resolve_enum_name_from_context,
+    enum_value_target_at_offset, enum_value_usage_at_offset, enum_value_usages_in_tree,
+    resolve_enum_name_from_context, resolve_option_members_from_context, EnumContext,
 };
 use crate::handlers::events::{
     event_invocation_target_at_offset, event_publisher_target_at_offset,
@@ -16,6 +17,58 @@ use crate::handlers::events::{
     find_event_subscriber_usages,
 };
 use crate::state::WorldState;
+
+fn point_at_offset(source: &str, offset: usize) -> Option<tree_sitter::Point> {
+    if offset > source.len() {
+        return None;
+    }
+    let prefix = &source[..offset];
+    let row = prefix.bytes().filter(|&b| b == b'\n').count();
+    let column = prefix.rfind('\n').map(|idx| offset - idx - 1).unwrap_or(offset);
+    Some(tree_sitter::Point { row, column })
+}
+
+fn inline_option_member_location(
+    uri: &lsp_types::Url,
+    doc: &al_syntax::document::DocumentState,
+    source: &str,
+    qualifier_byte_offset: usize,
+    value_name: &str,
+) -> Option<Location> {
+    let ctx = identifier_context_at_offset(&doc.tree, source, &doc.symbol_table, qualifier_byte_offset)?;
+    let sym = ctx.symbol?;
+    let decl_start = sym.start_byte.min(source.len());
+    let decl_end = sym.end_byte.min(source.len());
+    if decl_start >= decl_end {
+        return None;
+    }
+
+    let decl_source = &source[decl_start..decl_end];
+    let option_pos_rel = decl_source.to_ascii_lowercase().find("option")?;
+    let search_start = decl_start + option_pos_rel + "option".len();
+    let search_source = &source[search_start..decl_end];
+
+    let quoted = format!("\"{}\"", value_name);
+    if let Some(rel) = search_source.find(&quoted) {
+        let start = search_start + rel;
+        let end = start + quoted.len();
+        return Some(Location {
+            uri: uri.clone(),
+            range: ts_range_to_lsp_range(point_at_offset(source, start)?, point_at_offset(source, end)?),
+        });
+    }
+
+    if let Some(rel) = search_source.find(value_name) {
+        let start = search_start + rel;
+        let end = start + value_name.len();
+        return Some(Location {
+            uri: uri.clone(),
+            range: ts_range_to_lsp_range(point_at_offset(source, start)?, point_at_offset(source, end)?),
+        });
+    }
+
+    None
+}
 
 pub fn handle_references(state: &WorldState, params: ReferenceParams) -> Option<Vec<Location>> {
     let uri = params.text_document_position.text_document.uri;
@@ -25,6 +78,94 @@ pub fn handle_references(state: &WorldState, params: ReferenceParams) -> Option<
     let doc = state.documents.get(&uri)?;
     let byte_offset = lsp_position_to_byte_offset(&doc.rope, position)?;
     let source = doc.source();
+
+    if let Some(usage) = enum_value_usage_at_offset(&doc.tree, &source, byte_offset) {
+        if let Some((_type_info, members)) =
+            resolve_option_members_from_context(state, &uri, &usage.context)
+        {
+            if members
+                .iter()
+                .any(|member| member.eq_ignore_ascii_case(&usage.value_name))
+            {
+                if let EnumContext::Direct {
+                    qualifier_byte_offset,
+                    ..
+                } = usage.context
+                {
+                    let target_ctx = identifier_context_at_offset(
+                        &doc.tree,
+                        &source,
+                        &doc.symbol_table,
+                        qualifier_byte_offset,
+                    )?;
+                    let target_sym = target_ctx.symbol?;
+
+                    let mut locations = Vec::new();
+                    if include_declaration {
+                        if let Some(location) = inline_option_member_location(
+                            &uri,
+                            &doc,
+                            &source,
+                            qualifier_byte_offset,
+                            &usage.value_name,
+                        ) {
+                            locations.push(location);
+                        }
+                    }
+
+                    for other_usage in enum_value_usages_in_tree(&doc.tree, &source) {
+                        if !other_usage.value_name.eq_ignore_ascii_case(&usage.value_name) {
+                            continue;
+                        }
+                        let Some((_other_type, other_members)) =
+                            resolve_option_members_from_context(state, &uri, &other_usage.context)
+                        else {
+                            continue;
+                        };
+                        if !other_members
+                            .iter()
+                            .any(|member| member.eq_ignore_ascii_case(&other_usage.value_name))
+                        {
+                            continue;
+                        }
+                        let EnumContext::Direct {
+                            qualifier_byte_offset: other_qualifier_byte_offset,
+                            ..
+                        } = other_usage.context
+                        else {
+                            continue;
+                        };
+                        let Some(other_ctx) = identifier_context_at_offset(
+                            &doc.tree,
+                            &source,
+                            &doc.symbol_table,
+                            other_qualifier_byte_offset,
+                        ) else {
+                            continue;
+                        };
+                        let Some(other_sym) = other_ctx.symbol else {
+                            continue;
+                        };
+                        if other_sym.start_byte != target_sym.start_byte
+                            || other_sym.end_byte != target_sym.end_byte
+                            || !other_sym.name.eq_ignore_ascii_case(&target_sym.name)
+                        {
+                            continue;
+                        }
+
+                        locations.push(Location {
+                            uri: uri.clone(),
+                            range: ts_range_to_lsp_range(other_usage.start, other_usage.end),
+                        });
+                    }
+
+                    if !locations.is_empty() {
+                        return Some(locations);
+                    }
+                }
+            }
+        }
+    }
 
     if let Some((enum_name, value_name)) =
         enum_value_target_at_offset(state, &uri, &doc.tree, &source, byte_offset)
@@ -1056,6 +1197,48 @@ codeunit 50100 Test
         assert!(
             lines.contains(&13),
             "expected usage on line 13, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_references_global_inline_option_value_from_usage() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option Alpha, "Bra-vo";
+
+    procedure Run()
+    begin
+        Message('%1', GlobalChoice::Alpha);
+        Message('%1', GlobalChoice::"Bra-vo");
+        Message('%1', GlobalChoice::Alpha);
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let params = make_ref_params(uri, 7, 36, true);
+        let result = handle_references(&state, params);
+        assert!(
+            result.is_some(),
+            "expected inline option references from global usage"
+        );
+        let locs = result.unwrap();
+        let lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+        assert!(
+            lines.contains(&3),
+            "expected declaration on line 3, got: {lines:?}"
+        );
+        assert!(
+            lines.contains(&7) && lines.contains(&9),
+            "expected matching Alpha usages on lines 7 and 9, got: {lines:?}"
+        );
+        assert!(
+            !lines.contains(&8),
+            "did not expect non-matching Bra-vo usage on line 8, got: {lines:?}"
         );
     }
 

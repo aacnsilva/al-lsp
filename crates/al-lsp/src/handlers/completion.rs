@@ -4622,6 +4622,56 @@ codeunit 50100 Test
     }
 
     #[test]
+    fn test_completion_global_inline_option_variable_usage() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option Alpha, "Bra-vo";
+
+    procedure Run()
+    begin
+        Message('%1', GlobalChoice::);
+        GlobalChoice.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (enum_line, enum_char) = cursor_after(source, "GlobalChoice::");
+        let enum_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), enum_line, enum_char),
+            )
+            .expect("expected global option member completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            enum_labels.iter().any(|l| l == "Alpha")
+                && enum_labels.iter().any(|l| l == "Bra-vo"),
+            "expected global option members Alpha/Bra-vo, got: {enum_labels:?}"
+        );
+
+        let (dot_line, dot_char) = cursor_after(source, "GlobalChoice.");
+        let dot_labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, dot_line, dot_char))
+                .expect("expected global option dot completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            dot_labels.iter().any(|l| l == "AsInteger"),
+            "expected global option built-in AsInteger, got: {dot_labels:?}"
+        );
+    }
+
+    #[test]
     fn test_completion_enum_values_for_record_field_with_slash_after_tablerelation_if_else() {
         let enum_source = r#"enum 50100 "Dummy KDS-Trigger Sends"
 {

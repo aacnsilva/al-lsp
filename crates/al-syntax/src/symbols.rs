@@ -487,6 +487,38 @@ mod tests {
     }
 
     #[test]
+    fn test_scoped_lookup_global_inline_option_variable() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option Alpha, "Bra-vo";
+
+    procedure Run()
+    begin
+        Message('%1', GlobalChoice::Alpha);
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+        let table = DocumentSymbolTable::new(symbols);
+
+        let proc_sym = table.symbols[0]
+            .children
+            .iter()
+            .find(|sym| matches!(sym.kind, AlSymbolKind::Procedure) && sym.name == "Run")
+            .expect("procedure symbol");
+        let mid = (proc_sym.start_byte + proc_sym.end_byte) / 2;
+
+        let results = table.lookup_in_scope("globalchoice", mid);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "GlobalChoice");
+        assert_eq!(
+            results[0].type_info.as_deref(),
+            Some("Option Alpha, \"Bra-vo\"")
+        );
+    }
+
+    #[test]
     fn test_interface_method_at() {
         let source = r#"interface IAddressProvider
 {

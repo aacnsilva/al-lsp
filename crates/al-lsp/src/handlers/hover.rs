@@ -374,6 +374,40 @@ codeunit 50100 Test
     }
 
     #[test]
+    fn test_hover_on_global_inline_option_value() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option Alpha, "Bra-vo";
+
+    procedure Run()
+    begin
+        Message('%1', GlobalChoice::Alpha);
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, mut character) = cursor_on(source, "GlobalChoice::Alpha");
+        character += "GlobalChoice::".len() as u32;
+        let hover = handle_hover(&state, make_hover_params(uri, line, character))
+            .expect("expected hover result");
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("option value")
+                && content.value.contains("Alpha")
+                && content.value.contains("Option Alpha, \"Bra-vo\""),
+            "expected global option hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
     fn test_hover_on_record_slash_field_member_with_tablerelation_if_else() {
         let enum_source = r#"enum 50100 "Dummy Trigger Mode"
 {
