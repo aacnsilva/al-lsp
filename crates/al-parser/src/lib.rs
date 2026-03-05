@@ -689,6 +689,38 @@ codeunit 50100 Test
     }
 
     #[test]
+    fn test_parse_trigger_boolean_and_named_return_values() {
+        let source = r#"page 50100 "Dummy Card"
+{
+    layout
+    {
+        area(content)
+        {
+            field(Name; Rec.Name)
+            {
+                trigger OnLookup(var LookupText: Text): Boolean
+                begin
+                    exit(false);
+                end;
+
+                trigger OnAssistEdit(var InputText: Text) Result: Boolean
+                begin
+                    exit(Result);
+                end;
+            }
+        }
+    }
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(
+            !root.has_error(),
+            "tree has errors for trigger return values: {}",
+            root.to_sexp()
+        );
+    }
+
+    #[test]
     fn test_parse_exact_option_parameter_and_local_variable_declarations() {
         let source = r#"codeunit 50100 Dummy
 {

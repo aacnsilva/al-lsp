@@ -731,6 +731,7 @@ module.exports = grammar({
         "(",
         field("parameters", optional($.parameter_list)),
         ")",
+        optional(field("return_type", $.return_type)),
         optional(field("vars", $.var_section)),
         field("body", $.block)
       ),

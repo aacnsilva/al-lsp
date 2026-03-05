@@ -350,6 +350,47 @@ fn extract_trigger_symbol(node: Node, source: &str) -> Option<AlSymbol> {
     let name = extract_name(name_node, source);
 
     let mut children = Vec::new();
+    let mut type_info = None;
+    let mut return_symbol: Option<AlSymbol> = None;
+    if let Some(rt) = node.child_by_field_name("return_type") {
+        let rt_type = rt
+            .child_by_field_name("type")
+            .map(|t| extract_type_info(t, source))
+            .or_else(|| {
+                let text = node_text(rt, source).trim_start_matches(':').trim();
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text.to_string())
+                }
+            });
+        type_info = rt_type.clone();
+
+        if let Some(rt_name_node) = rt.child_by_field_name("name") {
+            return_symbol = Some(AlSymbol {
+                name: extract_name(rt_name_node, source),
+                kind: AlSymbolKind::Variable,
+                type_info: rt_type,
+                implements: Vec::new(),
+                start_byte: rt.start_byte(),
+                end_byte: rt.end_byte(),
+                start_point: rt.start_position(),
+                end_point: rt.end_position(),
+                name_start_point: rt_name_node.start_position(),
+                name_end_point: rt_name_node.end_position(),
+                children: Vec::new(),
+            });
+        }
+    }
+
+    if let Some(params) = node.child_by_field_name("parameters") {
+        extract_parameter_symbols(params, source, &mut children);
+    }
+
+    if let Some(ret) = return_symbol {
+        children.push(ret);
+    }
+
     if let Some(vars) = node.child_by_field_name("vars") {
         extract_var_symbols(vars, source, &mut children);
     }
@@ -357,7 +398,7 @@ fn extract_trigger_symbol(node: Node, source: &str) -> Option<AlSymbol> {
     Some(AlSymbol {
         name,
         kind: AlSymbolKind::Trigger,
-        type_info: None,
+        type_info,
         implements: Vec::new(),
         start_byte: node.start_byte(),
         end_byte: node.end_byte(),
@@ -686,6 +727,73 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c.kind, AlSymbolKind::Variable) && c.name == "FunctionModeEnum"),
             "expected named return value to be extracted as local variable"
+        );
+    }
+
+    #[test]
+    fn test_extract_trigger_named_return_value_as_local_variable() {
+        let source = r#"controladdin "Dummy AddIn"
+{
+    procedure Invoke(Value: Text);
+}
+
+page 50100 "Dummy Card"
+{
+    layout
+    {
+        area(content)
+        {
+            usercontrol(Host; "Dummy AddIn")
+            {
+                trigger OnLookup(var LookupText: Text) LookupOk: Boolean
+                var
+                    LocalFlag: Boolean;
+                begin
+                    exit(LookupOk);
+                end;
+            }
+        }
+    }
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+
+        let page = symbols
+            .iter()
+            .find(|s| matches!(s.kind, AlSymbolKind::Object(AlObjectKind::Page)))
+            .expect("page symbol");
+        let usercontrol = page
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Field) && c.name == "Host")
+            .expect("usercontrol symbol");
+        let trigger = usercontrol
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Trigger) && c.name == "OnLookup")
+            .expect("trigger symbol");
+
+        assert_eq!(trigger.type_info.as_deref(), Some("Boolean"));
+        assert!(
+            trigger
+                .children
+                .iter()
+                .any(|c| matches!(c.kind, AlSymbolKind::Parameter) && c.name == "LookupText"),
+            "expected trigger parameter to be extracted"
+        );
+        assert!(
+            trigger
+                .children
+                .iter()
+                .any(|c| matches!(c.kind, AlSymbolKind::Variable) && c.name == "LookupOk"),
+            "expected named trigger return value to be extracted as local variable"
+        );
+        assert!(
+            trigger
+                .children
+                .iter()
+                .any(|c| matches!(c.kind, AlSymbolKind::Variable) && c.name == "LocalFlag"),
+            "expected trigger var-section variable to be extracted"
         );
     }
 

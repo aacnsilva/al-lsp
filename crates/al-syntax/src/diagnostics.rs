@@ -589,6 +589,38 @@ codeunit 50101 "My Subscriber"
     }
 
     #[test]
+    fn test_no_errors_for_trigger_boolean_and_named_return_value() {
+        let source = r#"page 50100 "Dummy Card"
+{
+    layout
+    {
+        area(content)
+        {
+            field(Name; Rec.Name)
+            {
+                trigger OnLookup(var LookupText: Text): Boolean
+                begin
+                    exit(false);
+                end;
+
+                trigger OnAssistEdit(var InputText: Text) Result: Boolean
+                begin
+                    exit(Result);
+                end;
+            }
+        }
+    }
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for trigger return value syntax, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
     fn test_no_errors_for_ternary_with_enum_qualified_values() {
         let source = r#"codeunit 50100 Test
 {
