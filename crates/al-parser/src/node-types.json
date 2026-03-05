@@ -963,59 +963,15 @@
       "required": true,
       "types": [
         {
-          "type": "actions_section",
+          "type": "controladdin_procedure_declaration",
           "named": true
         },
         {
-          "type": "area_section",
-          "named": true
-        },
-        {
-          "type": "dataset_section",
-          "named": true
-        },
-        {
-          "type": "fieldgroups_section",
-          "named": true
-        },
-        {
-          "type": "fields_section",
-          "named": true
-        },
-        {
-          "type": "group_section",
+          "type": "event_declaration",
           "named": true
         },
         {
           "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "keys_section",
-          "named": true
-        },
-        {
-          "type": "labels_section",
-          "named": true
-        },
-        {
-          "type": "layout_section",
-          "named": true
-        },
-        {
-          "type": "page_action",
-          "named": true
-        },
-        {
-          "type": "page_field",
-          "named": true
-        },
-        {
-          "type": "part_section",
-          "named": true
-        },
-        {
-          "type": "procedure_declaration",
           "named": true
         },
         {
@@ -1025,28 +981,142 @@
         {
           "type": "quoted_identifier",
           "named": true
-        },
+        }
+      ]
+    }
+  },
+  {
+    "type": "controladdin_procedure_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      },
+      "parameters": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "parameter_list",
+            "named": true
+          }
+        ]
+      },
+      "return_type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "controladdin_return_type",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
         {
-          "type": "repeater_section",
-          "named": true
-        },
-        {
-          "type": "requestpage_section",
-          "named": true
-        },
-        {
-          "type": "trigger_declaration",
-          "named": true
-        },
-        {
-          "type": "usercontrol_section",
-          "named": true
-        },
-        {
-          "type": "var_section",
+          "type": "attribute",
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "controladdin_return_type",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "array_type",
+            "named": true
+          },
+          {
+            "type": "codeunit_type",
+            "named": true
+          },
+          {
+            "type": "dictionary_type",
+            "named": true
+          },
+          {
+            "type": "dotnet_type",
+            "named": true
+          },
+          {
+            "type": "enum_type",
+            "named": true
+          },
+          {
+            "type": "interface_type",
+            "named": true
+          },
+          {
+            "type": "label_type",
+            "named": true
+          },
+          {
+            "type": "list_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
+            "type": "page_type",
+            "named": true
+          },
+          {
+            "type": "query_type",
+            "named": true
+          },
+          {
+            "type": "record_type",
+            "named": true
+          },
+          {
+            "type": "report_type",
+            "named": true
+          },
+          {
+            "type": "simple_type",
+            "named": true
+          },
+          {
+            "type": "sized_type",
+            "named": true
+          },
+          {
+            "type": "testpage_type",
+            "named": true
+          },
+          {
+            "type": "testrequestpage_type",
+            "named": true
+          },
+          {
+            "type": "xmlport_type",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1554,6 +1624,46 @@
       "types": [
         {
           "type": "property",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "event_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      },
+      "parameters": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "parameter_list",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
           "named": true
         }
       ]

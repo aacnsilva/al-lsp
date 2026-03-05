@@ -729,4 +729,47 @@ codeunit 50100 Test
             root.to_sexp()
         );
     }
+
+    #[test]
+    fn test_parse_controladdin_and_page_usercontrol_usage() {
+        let source = r#"controladdin "Dummy AddIn"
+{
+    Scripts = 'main.js';
+    StartupScript = 'startup.js';
+    StyleSheets = 'styles.css';
+
+    procedure Invoke(Value: Text);
+    event Ready(Value: Text);
+}
+
+page 50100 "Dummy Host"
+{
+    layout
+    {
+        area(content)
+        {
+            usercontrol(Host; "Dummy AddIn")
+            {
+                ApplicationArea = All;
+
+                trigger Ready(Value: Text)
+                begin
+                end;
+            }
+        }
+    }
+
+    procedure Run()
+    begin
+        CurrPage.Host.Invoke('x');
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(
+            !root.has_error(),
+            "tree has errors for controladdin/usercontrol sample: {}",
+            root.to_sexp()
+        );
+    }
 }

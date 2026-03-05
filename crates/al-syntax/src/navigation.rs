@@ -444,7 +444,9 @@ pub fn extract_type_object_name(type_info: &str) -> Option<(&'static str, &str)>
     let object_kind = match kind.to_ascii_lowercase().as_str() {
         "record" => "table",
         "codeunit" => "codeunit",
+        "controladdin" => "controladdin",
         "page" => "page",
+        "pageextension" => "pageextension",
         "report" => "report",
         "query" => "query",
         "xmlport" => "xmlport",
@@ -1285,6 +1287,10 @@ mod tests {
             Some(("text", "Text"))
         );
         assert_eq!(extract_type_object_name("Code[20]"), Some(("code", "Code")));
+        assert_eq!(
+            extract_type_object_name("ControlAddIn \"Demo AddIn\""),
+            Some(("controladdin", "Demo AddIn"))
+        );
         assert_eq!(
             extract_type_object_name("JsonObject"),
             Some(("jsonobject", "JsonObject"))

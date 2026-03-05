@@ -1169,6 +1169,12 @@ fn resolve_object_type_from_symbol_name(
     object_name: &str,
     scope_byte: usize,
 ) -> Option<(String, String)> {
+    if object_name.eq_ignore_ascii_case("CurrPage") {
+        if let Some((object_kind, object_name)) = enclosing_currpage_target(doc, scope_byte) {
+            return Some((object_kind, object_name));
+        }
+    }
+
     if let Some(object_kind) = builtin_object_kind_from_name(object_name) {
         return Some((object_kind.to_string(), object_name.to_string()));
     }
@@ -1190,6 +1196,21 @@ fn resolve_object_type_from_symbol_name(
     let type_info = type_info_owned.as_deref()?;
     let (object_kind, object_name) = extract_type_object_name(type_info)?;
     Some((object_kind.to_string(), object_name.to_string()))
+}
+
+fn enclosing_currpage_target(doc: &DocumentState, scope_byte: usize) -> Option<(String, String)> {
+    let object = doc
+        .symbol_table
+        .symbols
+        .iter()
+        .find(|sym| sym.start_byte <= scope_byte && scope_byte <= sym.end_byte)?;
+    let AlSymbolKind::Object(kind) = object.kind else {
+        return None;
+    };
+    match kind.label() {
+        "page" | "pageextension" => Some((kind.label().to_string(), object.name.clone())),
+        _ => None,
+    }
 }
 
 pub(crate) fn resolve_object_type_from_expression(
@@ -1508,7 +1529,16 @@ where
 fn supports_symbol_object_lookup(object_kind: &str) -> bool {
     matches!(
         object_kind.to_ascii_lowercase().as_str(),
-        "table" | "codeunit" | "page" | "report" | "query" | "xmlport" | "enum" | "interface"
+        "table"
+            | "codeunit"
+            | "controladdin"
+            | "page"
+            | "pageextension"
+            | "report"
+            | "query"
+            | "xmlport"
+            | "enum"
+            | "interface"
     )
 }
 
@@ -1527,11 +1557,13 @@ fn property_scope_for_container(kind: &str) -> Option<&'static str> {
         "table_declaration" | "table_extension_declaration" => Some("table"),
         "codeunit_declaration" => Some("codeunit"),
         "page_declaration" | "page_extension_declaration" => Some("page"),
+        "controladdin_declaration" => Some("controladdin"),
         "report_declaration" => Some("report"),
         "query_declaration" => Some("query"),
         "xmlport_declaration" => Some("xmlport"),
         "interface_declaration" => Some("interface"),
         "field_declaration" | "page_field" => Some("field"),
+        "usercontrol_section" => Some("field"),
         "key_declaration" => Some("key"),
         "enum_declaration" | "enum_extension_declaration" => Some("enum"),
         "enum_value_declaration" => Some("enumvalue"),
@@ -4718,6 +4750,57 @@ codeunit 50100 Test
         assert!(
             dot_labels.iter().any(|l| l == "AsInteger"),
             "expected option built-in AsInteger, got: {dot_labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_currpage_usercontrol_exposes_controladdin_procedures() {
+        let source = r#"controladdin "Dummy AddIn"
+{
+    procedure Invoke(Value: Text);
+    procedure Refresh();
+    event Ready(Value: Text);
+}
+
+page 50100 "Dummy Host"
+{
+    layout
+    {
+        area(content)
+        {
+            usercontrol(Host; "Dummy AddIn")
+            {
+                ApplicationArea = All;
+            }
+        }
+    }
+
+    procedure Run()
+    begin
+        CurrPage.Host.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "CurrPage.Host.");
+        let labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, line, character))
+                .expect("expected control add-in completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            labels.iter().any(|l| l == "Invoke"),
+            "expected control add-in procedure Invoke, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Refresh"),
+            "expected control add-in procedure Refresh, got: {labels:?}"
         );
     }
 

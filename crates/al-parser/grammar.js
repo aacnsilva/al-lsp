@@ -138,7 +138,13 @@ module.exports = grammar({
       seq(kw("permissionset"), $.integer_literal, $._object_name, "{", optional($._object_body), "}"),
 
     controladdin_declaration: ($) =>
-      seq(kw("controladdin"), $._object_name, "{", optional($._object_body), "}"),
+      seq(
+        kw("controladdin"),
+        $._object_name,
+        "{",
+        optional($._controladdin_body),
+        "}"
+      ),
 
     _object_name: ($) => choice($.identifier, $.quoted_identifier),
 
@@ -191,6 +197,15 @@ module.exports = grammar({
         )
       ),
 
+    _controladdin_body: ($) =>
+      repeat1(
+        choice(
+          $.property,
+          $.controladdin_procedure_declaration,
+          $.event_declaration
+        )
+      ),
+
     // Method signature without a body — used in interfaces.
     interface_method: ($) =>
       seq(
@@ -202,6 +217,32 @@ module.exports = grammar({
         field("parameters", optional($.parameter_list)),
         ")",
         optional(field("return_type", $.interface_return_type)),
+        optional(";")
+      ),
+
+    controladdin_procedure_declaration: ($) =>
+      seq(
+        repeat($.attribute),
+        kw("procedure"),
+        field("name", choice($.identifier, $.quoted_identifier)),
+        "(",
+        field("parameters", optional($.parameter_list)),
+        ")",
+        optional(field("return_type", $.controladdin_return_type)),
+        optional(";")
+      ),
+
+    controladdin_return_type: ($) =>
+      seq(":", field("type", $._type_reference)),
+
+    event_declaration: ($) =>
+      seq(
+        repeat($.attribute),
+        kw("event"),
+        field("name", choice($.identifier, $.quoted_identifier)),
+        "(",
+        field("parameters", optional($.parameter_list)),
+        ")",
         optional(";")
       ),
 

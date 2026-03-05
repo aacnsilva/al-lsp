@@ -787,6 +787,49 @@ codeunit 50101 "My Subscriber"
     }
 
     #[test]
+    fn test_no_errors_for_controladdin_and_page_usercontrol_usage() {
+        let source = r#"controladdin "Dummy AddIn"
+{
+    Scripts = 'main.js';
+    StartupScript = 'startup.js';
+    StyleSheets = 'styles.css';
+
+    procedure Invoke(Value: Text);
+    event Ready(Value: Text);
+}
+
+page 50100 "Dummy Host"
+{
+    layout
+    {
+        area(content)
+        {
+            usercontrol(Host; "Dummy AddIn")
+            {
+                ApplicationArea = All;
+
+                trigger Ready(Value: Text)
+                begin
+                end;
+            }
+        }
+    }
+
+    procedure Run()
+    begin
+        CurrPage.Host.Invoke('x');
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no syntax errors for controladdin/usercontrol sample, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
     fn test_errors_for_invalid_code() {
         let source = r#"codeunit 50100 Test
 {

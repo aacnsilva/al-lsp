@@ -216,7 +216,7 @@ fn extract_children_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "procedure_declaration" | "interface_method" => {
+            "procedure_declaration" | "interface_method" | "controladdin_procedure_declaration" => {
                 if let Some(sym) = extract_procedure_symbol(child, source) {
                     symbols.push(sym);
                 }
@@ -239,6 +239,34 @@ fn extract_children_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol
                 if let Some(sym) = extract_enum_value_symbol(child, source) {
                     symbols.push(sym);
                 }
+            }
+            "event_declaration" => {
+                if let Some(sym) = extract_event_symbol(child, source) {
+                    symbols.push(sym);
+                }
+            }
+            "layout_section" | "area_section" | "group_section" | "repeater_section"
+            | "usercontrol_section" => {
+                extract_nested_page_symbols(child, source, symbols);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn extract_nested_page_symbols(node: Node, source: &str, symbols: &mut Vec<AlSymbol>) {
+    if node.kind() == "usercontrol_section" {
+        if let Some(sym) = extract_usercontrol_symbol(node, source) {
+            symbols.push(sym);
+        }
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "area_section" | "group_section" | "repeater_section" | "usercontrol_section" => {
+                extract_nested_page_symbols(child, source, symbols);
             }
             _ => {}
         }
@@ -330,6 +358,70 @@ fn extract_trigger_symbol(node: Node, source: &str) -> Option<AlSymbol> {
         name,
         kind: AlSymbolKind::Trigger,
         type_info: None,
+        implements: Vec::new(),
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+        start_point: node.start_position(),
+        end_point: node.end_position(),
+        name_start_point: name_node.start_position(),
+        name_end_point: name_node.end_position(),
+        children,
+    })
+}
+
+fn extract_event_symbol(node: Node, source: &str) -> Option<AlSymbol> {
+    let name_node = node.child_by_field_name("name")?;
+    let name = extract_name(name_node, source);
+
+    let mut children = Vec::new();
+    if let Some(params) = node.child_by_field_name("parameters") {
+        extract_parameter_symbols(params, source, &mut children);
+    }
+
+    Some(AlSymbol {
+        name,
+        kind: AlSymbolKind::Trigger,
+        type_info: None,
+        implements: Vec::new(),
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+        start_point: node.start_position(),
+        end_point: node.end_position(),
+        name_start_point: name_node.start_position(),
+        name_end_point: name_node.end_position(),
+        children,
+    })
+}
+
+fn extract_usercontrol_symbol(node: Node, source: &str) -> Option<AlSymbol> {
+    let name_node = node.child_by_field_name("name")?;
+    let addin_node = node.child_by_field_name("addin")?;
+    let name = extract_name(name_node, source);
+    let addin_name = extract_name(addin_node, source);
+
+    let mut children = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "trigger_declaration" => {
+                if let Some(sym) = extract_trigger_symbol(child, source) {
+                    children.push(sym);
+                }
+            }
+            "procedure_declaration" => {
+                if let Some(sym) = extract_procedure_symbol(child, source) {
+                    children.push(sym);
+                }
+            }
+            "var_section" => extract_var_symbols(child, source, &mut children),
+            _ => {}
+        }
+    }
+
+    Some(AlSymbol {
+        name,
+        kind: AlSymbolKind::Field,
+        type_info: Some(format!("ControlAddIn {}", addin_name)),
         implements: Vec::new(),
         start_byte: node.start_byte(),
         end_byte: node.end_byte(),
@@ -787,5 +879,71 @@ mod tests {
             .find(|c| matches!(c.kind, AlSymbolKind::Variable) && c.name == "ActionKind")
             .expect("global option variable");
         assert_eq!(global.type_info.as_deref(), Some("Option ,Start,Stop"));
+    }
+
+    #[test]
+    fn test_extract_controladdin_and_usercontrol_symbols() {
+        let source = r#"controladdin "Dummy AddIn"
+{
+    Scripts = 'main.js';
+
+    procedure Invoke(Value: Text);
+    event Ready(Value: Text);
+}
+
+page 50100 "Dummy Host"
+{
+    layout
+    {
+        area(content)
+        {
+            usercontrol(Host; "Dummy AddIn")
+            {
+                ApplicationArea = All;
+
+                trigger Ready(Value: Text)
+                begin
+                end;
+            }
+        }
+    }
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+
+        assert_eq!(symbols.len(), 2);
+
+        let addin = &symbols[0];
+        assert_eq!(addin.name, "Dummy AddIn");
+        assert!(matches!(
+            addin.kind,
+            AlSymbolKind::Object(AlObjectKind::ControlAddin)
+        ));
+        assert!(
+            addin.children.iter().any(|c| {
+                matches!(c.kind, AlSymbolKind::Procedure) && c.name == "Invoke"
+            }),
+            "expected control add-in procedure symbol"
+        );
+        assert!(
+            addin.children.iter().any(|c| {
+                matches!(c.kind, AlSymbolKind::Trigger) && c.name == "Ready"
+            }),
+            "expected control add-in event symbol"
+        );
+
+        let page = &symbols[1];
+        let host = page
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Field) && c.name == "Host")
+            .expect("usercontrol symbol");
+        assert_eq!(host.type_info.as_deref(), Some("ControlAddIn Dummy AddIn"));
+        assert!(
+            host.children
+                .iter()
+                .any(|c| matches!(c.kind, AlSymbolKind::Trigger) && c.name == "Ready"),
+            "expected usercontrol trigger symbol"
+        );
     }
 }

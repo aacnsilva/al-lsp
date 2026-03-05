@@ -6894,6 +6894,84 @@ const PAGE_PROPERTIES: &[BuiltinPropertyDoc] = &[
     },
 ];
 
+const CONTROLADDIN_PROPERTIES: &[BuiltinPropertyDoc] = &[
+    BuiltinPropertyDoc {
+        name: "Access",
+        summary: "Controls accessibility of the object.",
+        literal_values: &["Public", "Internal"],
+    },
+    BuiltinPropertyDoc {
+        name: "Scripts",
+        summary: "JavaScript files loaded for the control add-in.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "StartupScript",
+        summary: "JavaScript file loaded when the control add-in starts.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "RecreateScript",
+        summary: "JavaScript file loaded when the control add-in is recreated.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "RefreshScript",
+        summary: "JavaScript file loaded when the control add-in is refreshed.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "StyleSheets",
+        summary: "Stylesheet files loaded for the control add-in.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "Images",
+        summary: "Image resources packaged with the control add-in.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "RequestedHeight",
+        summary: "Preferred initial height of the control add-in.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "RequestedWidth",
+        summary: "Preferred initial width of the control add-in.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "MinimumHeight",
+        summary: "Minimum height of the control add-in.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "MaximumHeight",
+        summary: "Maximum height of the control add-in.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "MinimumWidth",
+        summary: "Minimum width of the control add-in.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "MaximumWidth",
+        summary: "Maximum width of the control add-in.",
+        literal_values: &[],
+    },
+    BuiltinPropertyDoc {
+        name: "HorizontalStretch",
+        summary: "Controls horizontal stretch behavior.",
+        literal_values: BOOLEAN_VALUES,
+    },
+    BuiltinPropertyDoc {
+        name: "VerticalStretch",
+        summary: "Controls vertical stretch behavior.",
+        literal_values: BOOLEAN_VALUES,
+    },
+];
+
 const FIELD_PROPERTIES: &[BuiltinPropertyDoc] = &[
     BuiltinPropertyDoc {
         name: "ApplicationArea",
@@ -7518,6 +7596,7 @@ pub fn properties_for_scope(scope: &str) -> &'static [BuiltinPropertyDoc] {
     match scope.to_ascii_lowercase().as_str() {
         "table" => TABLE_PROPERTIES,
         "codeunit" => CODEUNIT_PROPERTIES,
+        "controladdin" => CONTROLADDIN_PROPERTIES,
         "page" => PAGE_PROPERTIES,
         "field" => FIELD_PROPERTIES,
         "key" => KEY_PROPERTIES,
@@ -7535,6 +7614,7 @@ pub fn literal_values_for_property(property_name: &str) -> Option<&'static [&'st
     [
         TABLE_PROPERTIES,
         CODEUNIT_PROPERTIES,
+        CONTROLADDIN_PROPERTIES,
         PAGE_PROPERTIES,
         FIELD_PROPERTIES,
         KEY_PROPERTIES,

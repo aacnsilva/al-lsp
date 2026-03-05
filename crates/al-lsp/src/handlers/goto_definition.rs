@@ -1057,6 +1057,48 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
     }
 
     #[test]
+    fn test_goto_definition_currpage_usercontrol_controladdin_method() {
+        let source = r#"controladdin "Dummy AddIn"
+{
+    procedure Invoke(Value: Text);
+}
+
+page 50100 "Dummy Host"
+{
+    layout
+    {
+        area(content)
+        {
+            usercontrol(Host; "Dummy AddIn")
+            {
+                ApplicationArea = All;
+            }
+        }
+    }
+
+    procedure Run()
+    begin
+        CurrPage.Host.Invoke('x');
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "CurrPage.Host.Invoke");
+        let character = character + "CurrPage.Host.".len() as u32;
+        let result = handle_goto_definition(&state, make_goto_params(uri.clone(), line, character));
+        assert!(result.is_some(), "expected goto-definition result");
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter().any(|l| l.uri == uri && l.range.start.line == 2),
+            "expected navigation to control add-in procedure declaration on line 2, got: {locs:?}"
+        );
+    }
+
+    #[test]
     fn test_goto_definition_record_variable_usage_to_table_cross_doc() {
         let table_source = r#"table 18 Customer
 {
