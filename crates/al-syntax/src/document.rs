@@ -77,8 +77,14 @@ impl DocumentState {
         self.tree.edit(&edit);
 
         // Re-parse incrementally
-        let full_source = self.rope.to_string();
-        self.source_text = Arc::<str>::from(full_source.clone());
+        let mut full_source = self.source_text.to_string();
+        let replace_start = start_byte.min(full_source.len());
+        let mut replace_end = old_end_byte.min(full_source.len());
+        if replace_end < replace_start {
+            replace_end = replace_start;
+        }
+        full_source.replace_range(replace_start..replace_end, new_text);
+        self.source_text = Arc::<str>::from(full_source.as_str());
         if let Some(new_tree) = al_parser::parse_with(&full_source, Some(&self.tree)) {
             let symbols = extract_symbols(&new_tree, &full_source);
             self.diagnostics = extract_diagnostics(&new_tree, &full_source);

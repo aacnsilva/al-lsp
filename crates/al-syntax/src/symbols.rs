@@ -43,39 +43,55 @@ impl DocumentSymbolTable {
     /// Searches the children of the scope, then falls back to the object level.
     pub fn lookup_in_scope(&self, name: &str, scope_byte: usize) -> Vec<&AlSymbol> {
         let key = name.to_lowercase();
-        let mut results = Vec::new();
+        let Some(refs) = self.index.get(&key) else {
+            return Vec::new();
+        };
 
-        // Find the innermost scope containing the byte offset
-        for sym in &self.symbols {
+        let mut scope_object_idx = None;
+        let mut scope_child_idx = None;
+        for (object_idx, sym) in self.symbols.iter().enumerate() {
             if sym.start_byte <= scope_byte && scope_byte <= sym.end_byte {
-                // Check children (procedures, triggers) for local scope
-                for child in &sym.children {
+                scope_object_idx = Some(object_idx);
+                for (child_idx, child) in sym.children.iter().enumerate() {
                     if child.start_byte <= scope_byte && scope_byte <= child.end_byte {
-                        // Inside a procedure/trigger — check its locals first
-                        for local in &child.children {
-                            if local.name.to_lowercase() == key {
-                                results.push(local);
-                            }
-                        }
-                        if !results.is_empty() {
-                            return results;
-                        }
+                        scope_child_idx = Some(child_idx);
+                        break;
                     }
                 }
-                // Check object-level children
-                for child in &sym.children {
-                    if child.name.to_lowercase() == key {
-                        results.push(child);
-                    }
-                }
-                if !results.is_empty() {
-                    return results;
-                }
+                break;
             }
         }
 
-        // Fall back to global lookup
-        self.lookup(name)
+        let mut local_results = Vec::new();
+        let mut object_results = Vec::new();
+        let mut global_results = Vec::new();
+
+        for sym_ref in refs.iter() {
+            let Some(symbol) = self.resolve_ref(sym_ref) else {
+                continue;
+            };
+            if Some(sym_ref.object_idx) == scope_object_idx {
+                if let Some(child_idx) = scope_child_idx {
+                    if sym_ref.child_path.len() >= 2 && sym_ref.child_path[0] == child_idx {
+                        local_results.push(symbol);
+                        continue;
+                    }
+                }
+                if !sym_ref.child_path.is_empty() {
+                    object_results.push(symbol);
+                    continue;
+                }
+            }
+            global_results.push(symbol);
+        }
+
+        if !local_results.is_empty() {
+            return local_results;
+        }
+        if !object_results.is_empty() {
+            return object_results;
+        }
+        global_results
     }
 
     fn resolve_ref(&self, sym_ref: &SymbolRef) -> Option<&AlSymbol> {
@@ -91,33 +107,22 @@ impl DocumentSymbolTable {
     pub fn reachable_symbols(&self, byte_offset: usize) -> Vec<&AlSymbol> {
         let mut result = Vec::new();
 
-        for sym in &self.symbols {
-            if sym.start_byte <= byte_offset && byte_offset <= sym.end_byte {
-                // Inside this object — check for procedure scope
-                for child in &sym.children {
-                    if child.start_byte <= byte_offset && byte_offset <= child.end_byte {
-                        // Inside a procedure/trigger — add its locals first
-                        for local in &child.children {
-                            result.push(local);
-                        }
-                    }
-                }
-                // Add object-level children (procedures, variables, fields, etc.)
-                for child in &sym.children {
-                    result.push(child);
-                }
+        if let Some(object) = self
+            .symbols
+            .iter()
+            .find(|sym| sym.start_byte <= byte_offset && byte_offset <= sym.end_byte)
+        {
+            if let Some(child) = object
+                .children
+                .iter()
+                .find(|child| child.start_byte <= byte_offset && byte_offset <= child.end_byte)
+            {
+                result.extend(child.children.iter());
             }
-            // Add the object itself
-            result.push(sym);
+            result.extend(object.children.iter());
         }
 
-        // If we didn't find ourselves inside any object, return all top-level symbols
-        if result.is_empty() {
-            for sym in &self.symbols {
-                result.push(sym);
-            }
-        }
-
+        result.extend(self.symbols.iter());
         result
     }
 

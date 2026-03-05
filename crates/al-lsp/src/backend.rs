@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -13,7 +15,81 @@ use crate::state::WorldState;
 
 pub struct AlBackend {
     pub client: Client,
-    pub state: WorldState,
+    pub state: Arc<WorldState>,
+}
+
+impl AlBackend {
+    fn schedule_workspace_index(&self, reason: &'static str) {
+        self.state
+            .workspace_index_pending
+            .store(true, Ordering::Release);
+        if self
+            .state
+            .workspace_index_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            tracing::info!("workspace indexing already running; queued another pass");
+            return;
+        }
+
+        let client = self.client.clone();
+        let state = Arc::clone(&self.state);
+        tokio::spawn(async move {
+            loop {
+                state.workspace_index_pending.store(false, Ordering::Release);
+
+                let roots = state.workspace_roots.lock().unwrap().clone();
+                if roots.is_empty() {
+                    client
+                        .log_message(MessageType::WARNING, "al-lsp: no workspace root detected")
+                        .await;
+                    break;
+                }
+
+                client
+                    .log_message(
+                        MessageType::INFO,
+                        format!("al-lsp: indexing workspace in background ({reason})"),
+                    )
+                    .await;
+
+                let state_for_sources = Arc::clone(&state);
+                let source_count = tokio::task::spawn_blocking(move || {
+                    state_for_sources.load_workspace_source_files()
+                })
+                .await
+                .unwrap_or(0);
+
+                client
+                    .log_message(
+                        MessageType::INFO,
+                        format!("al-lsp: indexed {source_count} workspace source files"),
+                    )
+                    .await;
+
+                let state_for_packages = Arc::clone(&state);
+                let package_count = tokio::task::spawn_blocking(move || {
+                    state_for_packages.load_workspace_alpackages()
+                })
+                .await
+                .unwrap_or(0);
+
+                let total = state.documents.len();
+                let msg = format!(
+                    "al-lsp: workspace indexing complete ({source_count} source files, {package_count} package files, {total} total)"
+                );
+                tracing::info!("{}", msg);
+                client.log_message(MessageType::INFO, &msg).await;
+
+                if !state.workspace_index_pending.load(Ordering::Acquire) {
+                    break;
+                }
+            }
+
+            state.workspace_index_running.store(false, Ordering::Release);
+        });
+    }
 }
 
 #[tower_lsp::async_trait]
@@ -133,16 +209,7 @@ impl LanguageServer for AlBackend {
                     .await;
             }
         }
-
-        let count = self.state.load_workspace_files();
-        let total = self.state.documents.len();
-        let msg = format!(
-            "al-lsp: loaded {} .al files from workspace ({} total)",
-            count, total
-        );
-        tracing::info!("{}", msg);
-        self.client.log_message(MessageType::INFO, &msg).await;
-        self.client.show_message(MessageType::INFO, &msg).await;
+        self.schedule_workspace_index("startup");
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -200,14 +267,7 @@ impl LanguageServer for AlBackend {
             }
         }
 
-        // Rescan to pick up new files
-        let count = self.state.load_workspace_files();
-        let msg = format!(
-            "al-lsp: workspace folders changed, loaded {} new .al files",
-            count
-        );
-        tracing::info!("{}", msg);
-        self.client.log_message(MessageType::INFO, &msg).await;
+        self.schedule_workspace_index("workspace folder change");
     }
 
     async fn goto_definition(

@@ -7,7 +7,10 @@ use al_syntax::navigation::{
 };
 
 use crate::convert::{lsp_position_to_byte_offset, ts_range_to_lsp_range};
-use crate::handlers::completion::{enum_value_target_at_offset, member_access_target_at_offset};
+use crate::handlers::completion::{
+    enum_value_target_at_offset, enum_value_usage_at_offset, member_access_target_at_offset,
+    resolve_option_members_from_context,
+};
 use crate::handlers::events::{
     event_invocation_target_at_offset, event_subscriber_context_at_offset, find_event_publishers,
 };
@@ -76,6 +79,64 @@ fn find_enum_value_declarations(
         }
     }
     locations
+}
+
+fn find_inline_option_member_declaration(
+    uri: &lsp_types::Url,
+    doc: &al_syntax::document::DocumentState,
+    source: &str,
+    qualifier_byte_offset: usize,
+    value_name: &str,
+) -> Option<Location> {
+    let ctx = identifier_context_at_offset(&doc.tree, source, &doc.symbol_table, qualifier_byte_offset)?;
+    let sym = ctx.symbol?;
+    let decl_start = sym.start_byte.min(source.len());
+    let decl_end = sym.end_byte.min(source.len());
+    if decl_start >= decl_end {
+        return None;
+    }
+
+    let decl_source = &source[decl_start..decl_end];
+    let option_pos_rel = decl_source.to_ascii_lowercase().find("option")?;
+    let search_start = decl_start + option_pos_rel + "option".len();
+    let search_source = &source[search_start..decl_end];
+
+    let quoted = format!("\"{}\"", value_name);
+    if let Some(rel) = search_source.find(&quoted) {
+        let start = search_start + rel;
+        let end = start + quoted.len();
+        return Some(Location {
+            uri: uri.clone(),
+            range: ts_range_to_lsp_range(
+                point_at_offset(source, start)?,
+                point_at_offset(source, end)?,
+            ),
+        });
+    }
+
+    if let Some(rel) = search_source.find(value_name) {
+        let start = search_start + rel;
+        let end = start + value_name.len();
+        return Some(Location {
+            uri: uri.clone(),
+            range: ts_range_to_lsp_range(
+                point_at_offset(source, start)?,
+                point_at_offset(source, end)?,
+            ),
+        });
+    }
+
+    None
+}
+
+fn point_at_offset(source: &str, offset: usize) -> Option<Point> {
+    if offset > source.len() {
+        return None;
+    }
+    let prefix = &source[..offset];
+    let row = prefix.bytes().filter(|&b| b == b'\n').count();
+    let column = prefix.rfind('\n').map(|idx| offset - idx - 1).unwrap_or(offset);
+    Some(Point { row, column })
 }
 
 fn find_object_member_declarations(
@@ -420,6 +481,31 @@ pub fn handle_goto_definition(
     let doc = state.documents.get(&uri)?;
     let byte_offset = lsp_position_to_byte_offset(&doc.rope, position)?;
     let source = doc.source();
+    if let Some(usage) = enum_value_usage_at_offset(&doc.tree, &source, byte_offset) {
+        if let Some((_, members)) = resolve_option_members_from_context(state, &uri, &usage.context)
+        {
+            if members
+                .iter()
+                .any(|member| member.eq_ignore_ascii_case(&usage.value_name))
+            {
+                if let crate::handlers::completion::EnumContext::Direct {
+                    qualifier_byte_offset,
+                    ..
+                } = usage.context
+                {
+                    if let Some(location) = find_inline_option_member_declaration(
+                        &uri,
+                        &doc,
+                        &source,
+                        qualifier_byte_offset,
+                        &usage.value_name,
+                    ) {
+                        return Some(GotoDefinitionResponse::Scalar(location));
+                    }
+                }
+            }
+        }
+    }
     let enum_target = enum_value_target_at_offset(state, &uri, &doc.tree, &source, byte_offset);
 
     if let Some((enum_name, value_name)) = enum_target {
@@ -861,6 +947,81 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
         assert!(
             locs.iter().any(|l| l.range.start.line == 2),
             "expected navigation to Hello declaration on line 2, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_option_value_navigates_to_inline_declaration_member() {
+        let source = r#"codeunit 50100 Dummy
+{
+    procedure Run()
+    var
+        Choice: Option First, "Second Value";
+    begin
+        if Choice = Choice::"Second Value" then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, mut character) = cursor_on(source, "Choice::\"Second Value\"");
+        character += "Choice::".len() as u32;
+        let result = handle_goto_definition(&state, make_goto_params(uri.clone(), line, character));
+        assert!(result.is_some(), "expected goto-definition result");
+
+        let locs = locations_from(result.unwrap());
+        assert!(
+            locs.iter()
+                .any(|l| l.uri == uri && l.range.start.line == 4 && l.range.start.character >= 23),
+            "expected navigation to inline option member declaration on line 4, got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_exact_option_parameter_and_local_variable_values() {
+        let source = r#"codeunit 50100 Dummy
+{
+    procedure HelloWithOptions(OptionParameter : Option Alpha, "Bra-vo")
+    var
+        OptionVariable : Option C, "or D";
+    begin
+        Message('%1',OptionParameter::Alpha);
+        Message('%1',OptionVariable::C);
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (param_line, mut param_char) = cursor_on(source, "OptionParameter::Alpha");
+        param_char += "OptionParameter::".len() as u32;
+        let param_result =
+            handle_goto_definition(&state, make_goto_params(uri.clone(), param_line, param_char));
+        assert!(param_result.is_some(), "expected goto-definition for option parameter");
+        let param_locs = locations_from(param_result.unwrap());
+        assert!(
+            param_locs
+                .iter()
+                .any(|l| l.uri == uri && l.range.start.line == 2 && l.range.start.character >= 54),
+            "expected navigation to Alpha in parameter declaration, got: {param_locs:?}"
+        );
+
+        let (var_line, mut var_char) = cursor_on(source, "OptionVariable::C");
+        var_char += "OptionVariable::".len() as u32;
+        let var_result =
+            handle_goto_definition(&state, make_goto_params(uri.clone(), var_line, var_char));
+        assert!(var_result.is_some(), "expected goto-definition for option variable");
+        let var_locs = locations_from(var_result.unwrap());
+        assert!(
+            var_locs
+                .iter()
+                .any(|l| l.uri == uri && l.range.start.line == 4 && l.range.start.character >= 26),
+            "expected navigation to C in local option declaration, got: {var_locs:?}"
         );
     }
 

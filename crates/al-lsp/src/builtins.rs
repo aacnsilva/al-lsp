@@ -34,6 +34,8 @@ const XMLPORT_DOCS: &str =
     "https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/xmlport/xmlport-data-type";
 const ENUM_DOCS: &str =
     "https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/enum/enum-data-type";
+const OPTION_DOCS: &str =
+    "https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/option/option-data-type";
 const LIST_DOCS: &str =
     "https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/methods-auto/list/list-data-type";
 const DICTIONARY_DOCS: &str =
@@ -5918,7 +5920,15 @@ const LABEL_METHODS: &[BuiltinMethodDoc] = &[
     },
 ];
 
-const OPTION_METHODS: &[BuiltinMethodDoc] = &[];
+const OPTION_METHODS: &[BuiltinMethodDoc] = &[
+    BuiltinMethodDoc {
+        name: "AsInteger",
+        signature: "AsInteger(): Integer",
+        summary: "Gets the option value as its ordinal integer.",
+        docs_url: OPTION_DOCS,
+        params: PARAM_NONE,
+    },
+];
 
 const PRODUCT_NAME_METHODS: &[BuiltinMethodDoc] = &[
     BuiltinMethodDoc {
@@ -6922,6 +6932,11 @@ const FIELD_PROPERTIES: &[BuiltinPropertyDoc] = &[
             "OrganizationIdentifiableInformation",
             "SystemMetadata",
         ],
+    },
+    BuiltinPropertyDoc {
+        name: "DecimalPlaces",
+        summary: "Defines the minimum and maximum number of decimal places displayed and validated.",
+        literal_values: &[],
     },
     BuiltinPropertyDoc {
         name: "Editable",

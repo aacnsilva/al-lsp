@@ -4,6 +4,8 @@ mod convert;
 mod handlers;
 mod state;
 
+use std::sync::Arc;
+
 use tower_lsp::{LspService, Server};
 
 use backend::AlBackend;
@@ -21,7 +23,7 @@ async fn main() {
 
     let (service, socket) = LspService::new(|client| AlBackend {
         client,
-        state: WorldState::new(),
+        state: Arc::new(WorldState::new()),
     });
 
     Server::new(stdin, stdout, socket).serve(service).await;

@@ -232,6 +232,7 @@ module.exports = grammar({
         $.calc_formula_expression,
         $.table_view_expression,
         $.dataitem_link_expression,
+        $.decimal_places_value,
         $.property_option_value,
         $.string_literal,
         $.integer_literal,
@@ -244,6 +245,12 @@ module.exports = grammar({
         seq($.identifier, "::", $.identifier),
         // Property list: field1, field2
         commaSep1(choice($.identifier, $.quoted_identifier))
+      ),
+
+    decimal_places_value: ($) =>
+      choice(
+        seq($.integer_literal, ":", optional($.integer_literal)),
+        seq(":", $.integer_literal)
       ),
 
     table_view_expression: ($) =>

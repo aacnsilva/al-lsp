@@ -670,4 +670,99 @@ mod tests {
         assert_eq!(proc.children[2].name, "X");
         assert_eq!(proc.children[2].type_info.as_deref(), Some("Integer"));
     }
+
+    #[test]
+    fn test_extract_inline_option_variable_symbols() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option First, "Second Value";
+
+    procedure DoWork(LocalChoice: Option Alpha, Beta)
+    var
+        Choice: Option First, "Second Value";
+    begin
+        if Choice = Choice::"Second Value" then;
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+
+        assert_eq!(symbols.len(), 1);
+        let obj = &symbols[0];
+        assert_eq!(obj.name, "Dummy");
+
+        let global = obj
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Variable) && c.name == "GlobalChoice")
+            .expect("global option variable");
+        assert_eq!(
+            global.type_info.as_deref(),
+            Some("Option First, \"Second Value\"")
+        );
+
+        let proc = obj
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Procedure) && c.name == "DoWork")
+            .expect("procedure symbol");
+        assert_eq!(proc.type_info, None);
+
+        let param = proc
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Parameter) && c.name == "LocalChoice")
+            .expect("option parameter");
+        assert_eq!(param.type_info.as_deref(), Some("Option Alpha, Beta"));
+
+        let local = proc
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Variable) && c.name == "Choice")
+            .expect("local option variable");
+        assert_eq!(
+            local.type_info.as_deref(),
+            Some("Option First, \"Second Value\"")
+        );
+    }
+
+    #[test]
+    fn test_extract_exact_option_parameter_and_local_variable_symbols() {
+        let source = r#"codeunit 50100 Dummy
+{
+    procedure HelloWithOptions(OptionParameter : Option Alpha, "Bra-vo")
+    var
+        OptionVariable : Option C, "or D";
+    begin
+        Message('%1',OptionParameter::Alpha);
+        Message('%1',OptionVariable::C);
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+
+        let proc = symbols[0]
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Procedure) && c.name == "HelloWithOptions")
+            .expect("procedure symbol");
+
+        let parameter = proc
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Parameter) && c.name == "OptionParameter")
+            .expect("option parameter");
+        assert_eq!(
+            parameter.type_info.as_deref(),
+            Some("Option Alpha, \"Bra-vo\"")
+        );
+
+        let variable = proc
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Variable) && c.name == "OptionVariable")
+            .expect("option variable");
+        assert_eq!(variable.type_info.as_deref(), Some("Option C, \"or D\""));
+    }
 }

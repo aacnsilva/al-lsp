@@ -637,4 +637,75 @@ codeunit 50100 Test
         let root = tree.root_node();
         assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
     }
+
+    #[test]
+    fn test_parse_decimalplaces_property_variants() {
+        let source = r#"table 50100 "Dummy Numbers"
+{
+    fields
+    {
+        field(1; AmountA; Decimal)
+        {
+            DecimalPlaces = 1:4;
+        }
+        field(2; AmountB; Decimal)
+        {
+            DecimalPlaces = :2;
+        }
+        field(3; AmountC; Decimal)
+        {
+            DecimalPlaces = 2:;
+        }
+    }
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_inline_option_variable_declarations() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option First, "Second Value";
+
+    procedure DoWork(LocalChoice: Option Alpha, Beta)
+    var
+        Choice: Option First, "Second Value";
+    begin
+        if Choice = Choice::"Second Value" then;
+        if LocalChoice = LocalChoice::Alpha then;
+        if GlobalChoice = GlobalChoice::First then;
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(
+            !root.has_error(),
+            "tree has errors for inline option declarations: {}",
+            root.to_sexp()
+        );
+    }
+
+    #[test]
+    fn test_parse_exact_option_parameter_and_local_variable_declarations() {
+        let source = r#"codeunit 50100 Dummy
+{
+    procedure HelloWithOptions(OptionParameter : Option Alpha, "Bra-vo")
+    var
+        OptionVariable : Option C, "or D";
+    begin
+        Message('%1',OptionParameter::Alpha);
+        Message('%1',OptionVariable::C);
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(
+            !root.has_error(),
+            "tree has errors for exact option parameter/local declaration sample: {}",
+            root.to_sexp()
+        );
+    }
 }

@@ -324,28 +324,27 @@ pub(crate) fn event_subscriber_completion_items(
             let object_kind = ctx.object_kind.as_deref()?;
             let mut items = Vec::new();
             let mut seen = HashSet::new();
-            let object_kind_lower = object_kind.to_ascii_lowercase();
             let prefix = object_ref_prefix_for_kind(object_kind);
 
-            for entry in state.object_index.iter() {
-                let (kind, object_name_lower) = entry.key();
-                if kind != &object_kind_lower {
-                    continue;
-                }
+            state.visit_object_names_for_kind(object_kind, |object_name_lower| {
                 let escaped_name = object_name_lower.replace('"', "\"\"");
                 let label = format!("{prefix}::\"{escaped_name}\"");
                 if !matches_prefix_ci(&label, prefix_lower)
                     && !matches_prefix_ci(object_name_lower, prefix_lower)
                 {
-                    continue;
+                    return false;
                 }
 
-                let key = format!("{object_kind_lower}::{object_name_lower}");
+                let key = format!(
+                    "{}::{}",
+                    object_kind.to_ascii_lowercase(),
+                    object_name_lower
+                );
                 if !seen.insert(key) {
-                    continue;
+                    return false;
                 }
 
-                if !push_completion_item(
+                !push_completion_item(
                     &mut items,
                     CompletionItem {
                         label,
@@ -353,10 +352,8 @@ pub(crate) fn event_subscriber_completion_items(
                         detail: Some(format!("{object_kind} object")),
                         ..Default::default()
                     },
-                ) {
-                    break;
-                }
-            }
+                )
+            });
 
             if items.is_empty() {
                 for entry in state.documents.iter() {

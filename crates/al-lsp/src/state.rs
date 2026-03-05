@@ -1,5 +1,6 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use dashmap::DashMap;
 use lsp_types::Url;
@@ -13,12 +14,27 @@ pub struct IndexedObjectEntry {
     pub object_start_byte: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UriIndexedObjectEntry {
+    kind_lower: String,
+    name_lower: String,
+    object_start_byte: usize,
+}
+
 /// Global server state holding all open documents.
 pub struct WorldState {
     pub documents: DashMap<Url, DocumentState>,
     /// Workspace-wide object index:
     /// `(object_kind_lower, object_name_lower) -> object locations`.
     pub object_index: DashMap<(String, String), Vec<IndexedObjectEntry>>,
+    /// Reverse index of object names by kind for name completion.
+    pub object_names_by_kind: DashMap<String, Vec<String>>,
+    /// Reverse index of indexed objects per URI so reindexing can update only touched keys.
+    uri_object_index: DashMap<Url, Vec<UriIndexedObjectEntry>>,
+    /// Serializes background workspace indexing so rescans do not overlap.
+    pub workspace_index_running: AtomicBool,
+    /// Marks that another background index pass should run after the current one finishes.
+    pub workspace_index_pending: AtomicBool,
     /// Workspace root directories (resolved from InitializeParams).
     pub workspace_roots: std::sync::Mutex<Vec<PathBuf>>,
 }
@@ -28,6 +44,10 @@ impl WorldState {
         WorldState {
             documents: DashMap::new(),
             object_index: DashMap::new(),
+            object_names_by_kind: DashMap::new(),
+            uri_object_index: DashMap::new(),
+            workspace_index_running: AtomicBool::new(false),
+            workspace_index_pending: AtomicBool::new(false),
             workspace_roots: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -51,14 +71,14 @@ impl WorldState {
             return;
         };
 
+        let mut uri_entries = Vec::new();
         for object in &doc.symbol_table.symbols {
             let AlSymbolKind::Object(kind) = object.kind else {
                 continue;
             };
-            let key = (
-                kind.label().to_ascii_lowercase(),
-                object.name.to_ascii_lowercase(),
-            );
+            let kind_lower = kind.label().to_ascii_lowercase();
+            let name_lower = object.name.to_ascii_lowercase();
+            let key = (kind_lower.clone(), name_lower.clone());
             self.object_index
                 .entry(key)
                 .or_default()
@@ -66,20 +86,79 @@ impl WorldState {
                     uri: uri.clone(),
                     object_start_byte: object.start_byte,
                 });
+            {
+                let mut names = self.object_names_by_kind.entry(kind_lower.clone()).or_default();
+                if !names.iter().any(|name| name == &name_lower) {
+                    names.push(name_lower.clone());
+                }
+            }
+            uri_entries.push(UriIndexedObjectEntry {
+                kind_lower,
+                name_lower,
+                object_start_byte: object.start_byte,
+            });
         }
+        self.uri_object_index.insert(uri.clone(), uri_entries);
     }
 
     fn remove_uri_from_object_index(&self, uri: &Url) {
-        self.object_index.retain(|_, entries| {
-            entries.retain(|entry| &entry.uri != uri);
-            !entries.is_empty()
-        });
+        let Some((_, indexed_objects)) = self.uri_object_index.remove(uri) else {
+            return;
+        };
+
+        for indexed_object in indexed_objects {
+            let key = (
+                indexed_object.kind_lower.clone(),
+                indexed_object.name_lower.clone(),
+            );
+            let mut remove_key = false;
+            if let Some(mut entries) = self.object_index.get_mut(&key) {
+                entries.retain(|entry| {
+                    entry.uri != *uri || entry.object_start_byte != indexed_object.object_start_byte
+                });
+                remove_key = entries.is_empty();
+            }
+
+            if remove_key {
+                self.object_index.remove(&key);
+                let mut remove_kind = false;
+                if let Some(mut names) = self.object_names_by_kind.get_mut(&indexed_object.kind_lower)
+                {
+                    names.retain(|name| name != &indexed_object.name_lower);
+                    remove_kind = names.is_empty();
+                }
+                if remove_kind {
+                    self.object_names_by_kind.remove(&indexed_object.kind_lower);
+                }
+            }
+        }
+    }
+
+    pub fn visit_object_names_for_kind<F>(&self, object_kind: &str, mut visit: F) -> bool
+    where
+        F: FnMut(&str) -> bool,
+    {
+        let object_kind_lower = object_kind.to_ascii_lowercase();
+        let Some(names) = self.object_names_by_kind.get(&object_kind_lower) else {
+            return false;
+        };
+        for name in names.iter() {
+            if visit(name) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Scan workspace roots for `.al` files and load them into the document map.
     /// Also loads `.al` files from `.app` archives in `.alpackages/`.
     /// Skips files that are already loaded (e.g. opened via did_open).
     pub fn load_workspace_files(&self) -> usize {
+        self.load_workspace_source_files() + self.load_workspace_alpackages()
+    }
+
+    /// Scan workspace roots for source `.al` files only.
+    pub fn load_workspace_source_files(&self) -> usize {
         let roots = self.workspace_roots.lock().unwrap().clone();
         if roots.is_empty() {
             tracing::warn!("no workspace roots configured — cannot scan for .al files");
@@ -90,8 +169,16 @@ impl WorldState {
             tracing::info!("scanning workspace root: {}", root.display());
             count += self.scan_directory(root);
         }
-        count += self.load_alpackages(&roots);
         count
+    }
+
+    /// Load `.al` files from `.app` archives (ZIP) in `.alpackages/` directories.
+    pub fn load_workspace_alpackages(&self) -> usize {
+        let roots = self.workspace_roots.lock().unwrap().clone();
+        if roots.is_empty() {
+            return 0;
+        }
+        self.load_alpackages(&roots)
     }
 
     /// Load `.al` files from `.app` archives (ZIP) in `.alpackages/` directories.

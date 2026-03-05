@@ -241,6 +241,30 @@ fn table_field_declared_in_source(
     table_name: &str,
     field_name: &str,
 ) -> bool {
+    fn object_declares_field(source: &str, symbol: &AlSymbol, field_name: &str) -> bool {
+        let start = symbol.start_byte.min(source.len());
+        let end = symbol.end_byte.min(source.len());
+        if start >= end {
+            return false;
+        }
+        let object_text = &source[start..end];
+        let object_text_lower = object_text.to_ascii_lowercase();
+
+        let quoted_pattern = format!("; \"{}\";", field_name.to_ascii_lowercase());
+        if object_text_lower.contains(&quoted_pattern) {
+            return true;
+        }
+
+        if is_simple_identifier_name(field_name) {
+            let bare_pattern = format!("; {};", field_name.to_ascii_lowercase());
+            if object_text_lower.contains(&bare_pattern) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     let key = (
         table_name.to_ascii_lowercase(),
         field_name.to_ascii_lowercase(),
@@ -249,36 +273,41 @@ fn table_field_declared_in_source(
         return *found;
     }
 
-    for entry in state.documents.iter() {
-        let doc = entry.value();
-        let source = doc.source();
-        for symbol in &doc.symbol_table.symbols {
-            let AlSymbolKind::Object(kind) = symbol.kind else {
+    let object_key = ("table".to_string(), table_name.to_ascii_lowercase());
+    if let Some(indexed_entries) = state.object_index.get(&object_key) {
+        for indexed in indexed_entries.iter() {
+            let Some(doc) = state.documents.get(&indexed.uri) else {
                 continue;
             };
-            if kind.label() != "table" || !symbol.name.eq_ignore_ascii_case(table_name) {
+            let source = doc.source();
+            let object_symbol = doc.symbol_table.symbols.iter().find(|symbol| {
+                symbol.start_byte == indexed.object_start_byte
+                    && matches!(
+                        symbol.kind,
+                        AlSymbolKind::Object(kind)
+                            if kind.label() == "table" && symbol.name.eq_ignore_ascii_case(table_name)
+                    )
+            });
+            let Some(object_symbol) = object_symbol else {
                 continue;
-            }
-
-            let start = symbol.start_byte.min(source.len());
-            let end = symbol.end_byte.min(source.len());
-            if start >= end {
-                continue;
-            }
-            let object_text = &source[start..end];
-            let object_text_lower = object_text.to_ascii_lowercase();
-
-            // Common AL form: field(<id>; "<Field Name>"; <Type>)
-            let quoted_pattern = format!("; \"{}\";", field_name.to_ascii_lowercase());
-            if object_text_lower.contains(&quoted_pattern) {
+            };
+            if object_declares_field(source, object_symbol, field_name) {
                 cache.insert(key, true);
                 return true;
             }
-
-            // Unquoted identifier field name.
-            if is_simple_identifier_name(field_name) {
-                let bare_pattern = format!("; {};", field_name.to_ascii_lowercase());
-                if object_text_lower.contains(&bare_pattern) {
+        }
+    } else {
+        for entry in state.documents.iter() {
+            let doc = entry.value();
+            let source = doc.source();
+            for symbol in &doc.symbol_table.symbols {
+                let AlSymbolKind::Object(kind) = symbol.kind else {
+                    continue;
+                };
+                if kind.label() != "table" || !symbol.name.eq_ignore_ascii_case(table_name) {
+                    continue;
+                }
+                if object_declares_field(source, symbol, field_name) {
                     cache.insert(key, true);
                     return true;
                 }
@@ -295,11 +324,10 @@ fn build_object_decl_entry(
     object: &AlSymbol,
 ) -> ObjectDeclEntry {
     let mut members: HashMap<String, Vec<MemberEntry>> = HashMap::new();
-    let mut source_cache: Option<String> = None;
+    let source = target_doc.source();
 
     for child in &object.children {
         let access = if matches!(child.kind, AlSymbolKind::Procedure) {
-            let source = source_cache.get_or_insert_with(|| target_doc.source().to_string());
             procedure_access_modifier(target_doc, source, child)
         } else {
             ProcedureAccess::Public
@@ -1585,6 +1613,75 @@ codeunit 50101 Test
                     || d.message.contains("Unknown member")
             }),
             "did not expect diagnostics for Enum.AsInteger/FromInteger, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_inline_option_variables() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option First, "Second Value";
+
+    procedure Run(LocalChoice: Option Alpha, Beta)
+    var
+        Choice: Option First, "Second Value";
+        I: Integer;
+    begin
+        I := Choice.AsInteger();
+        if Choice = Choice::"Second Value" then;
+        if LocalChoice = LocalChoice::Alpha then;
+        if GlobalChoice = GlobalChoice::First then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("AsInteger")
+                    || d.message.contains("Second Value")
+                    || d.message.contains("Alpha")
+                    || d.message.contains("First")
+                    || d.message.contains("Unknown member")
+            }),
+            "did not expect diagnostics for inline option variable usage, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_exact_option_parameter_and_local_variable_usage() {
+        let source = r#"codeunit 50100 Dummy
+{
+    procedure HelloWithOptions(OptionParameter : Option Alpha, "Bra-vo")
+    var
+        OptionVariable : Option C, "or D";
+    begin
+        Message('%1',OptionParameter::Alpha);
+        Message('%1',OptionVariable::C);
+        Message('%1',OptionParameter.AsInteger());
+        Message('%1',OptionVariable.AsInteger());
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("Alpha")
+                    || d.message.contains("C")
+                    || d.message.contains("AsInteger")
+                    || d.message.contains("Unknown member")
+            }),
+            "did not expect diagnostics for exact option parameter/local usage sample, got: {diags:?}"
         );
     }
 

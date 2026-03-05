@@ -34,6 +34,7 @@ pub async fn handle_did_change(
 
     let mut changed = false;
     let mut has_full_sync_change = false;
+    let mut needs_reindex = false;
     if let Some(mut doc) = state.documents.get_mut(&uri) {
         for change in params.content_changes {
             changed = true;
@@ -75,13 +76,16 @@ pub async fn handle_did_change(
             } else {
                 // Full document sync
                 has_full_sync_change = true;
+                needs_reindex = true;
                 doc.reparse_full(&change.text);
             }
         }
     }
 
     if changed {
-        state.reindex_document(&uri);
+        if needs_reindex {
+            state.reindex_document(&uri);
+        }
         if let Some(doc_ref) = state.documents.get(&uri) {
             if has_full_sync_change {
                 publish_diagnostics(client, state, &uri, &doc_ref).await;

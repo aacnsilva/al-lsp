@@ -79,6 +79,14 @@ pub fn handle_completion(
     }
 
     if let Some(enum_context) = enum_context {
+        if let Some((_type_info, option_members)) =
+            resolve_option_members_from_context(state, &uri, &enum_context)
+        {
+            let option_items = collect_option_value_completions(&option_members, &prefix_lower);
+            if !option_items.is_empty() {
+                return Some(CompletionResponse::Array(option_items));
+            }
+        }
         if let Some(enum_name) = resolve_enum_name_from_context(state, &uri, &enum_context) {
             let enum_items = collect_enum_value_completions(state, &enum_name, &prefix_lower);
             if !enum_items.is_empty() {
@@ -496,6 +504,36 @@ fn collect_enum_value_completions(
     items
 }
 
+fn collect_option_value_completions(
+    option_members: &[String],
+    prefix_lower: &str,
+) -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+    let mut seen = HashSet::new();
+
+    for option_member in option_members {
+        if !matches_prefix_ci(option_member, prefix_lower) {
+            continue;
+        }
+        if !seen.insert(option_member.to_ascii_lowercase()) {
+            continue;
+        }
+        if !push_completion_item(
+            &mut items,
+            CompletionItem {
+                label: option_member.clone(),
+                kind: Some(CompletionItemKind::ENUM_MEMBER),
+                detail: Some("Option member".to_string()),
+                ..Default::default()
+            },
+        ) {
+            break;
+        }
+    }
+
+    items
+}
+
 fn collect_property_name_completions(scope: &str, prefix_lower: &str) -> Vec<CompletionItem> {
     let mut items = Vec::new();
     for property in properties_for_scope(scope) {
@@ -528,31 +566,24 @@ fn collect_object_name_value_completions(
 ) -> Vec<CompletionItem> {
     let mut items = Vec::new();
     let mut seen = HashSet::new();
-    let object_kind_lower = object_kind.to_ascii_lowercase();
 
-    for entry in state.object_index.iter() {
-        let (kind, object_name_lower) = entry.key();
-        if kind != &object_kind_lower {
-            continue;
-        }
+    state.visit_object_names_for_kind(object_kind, |object_name_lower| {
         if !matches_prefix_ci(object_name_lower, prefix_lower) {
-            continue;
+            return false;
         }
-        if !seen.insert(object_name_lower.clone()) {
-            continue;
+        if !seen.insert(object_name_lower.to_string()) {
+            return false;
         }
-        if !push_completion_item(
+        !push_completion_item(
             &mut items,
             CompletionItem {
-                label: object_name_lower.clone(),
+                label: object_name_lower.to_string(),
                 kind: Some(CompletionItemKind::CLASS),
                 detail: Some(format!("{object_kind} object")),
                 ..Default::default()
             },
-        ) {
-            break;
-        }
-    }
+        )
+    });
 
     if items.is_empty() {
         for entry in state.documents.iter() {
@@ -713,6 +744,100 @@ pub(crate) fn resolve_enum_name_from_context(
 
             find_table_field_enum_type(state, table_name, member_name)
         }
+    }
+}
+
+pub(crate) fn parse_option_members_from_type_info(type_info: &str) -> Option<Vec<String>> {
+    let trimmed = type_info.trim();
+    if trimmed.len() < 6 || !trimmed[..6].eq_ignore_ascii_case("option") {
+        return None;
+    }
+
+    let members_text = trimmed[6..].trim();
+    if members_text.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let bytes = members_text.as_bytes();
+    let mut members = Vec::new();
+    let mut start = 0usize;
+    let mut cursor = 0usize;
+    let mut in_quotes = false;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'"' => {
+                in_quotes = !in_quotes;
+                cursor += 1;
+            }
+            b',' if !in_quotes => {
+                let part = members_text[start..cursor].trim();
+                if !part.is_empty() {
+                    members.push(part.trim_matches('"').to_string());
+                }
+                cursor += 1;
+                start = cursor;
+            }
+            _ => cursor += 1,
+        }
+    }
+
+    let tail = members_text[start..].trim();
+    if !tail.is_empty() {
+        members.push(tail.trim_matches('"').to_string());
+    }
+
+    Some(members)
+}
+
+pub(crate) fn resolve_option_members_from_context(
+    state: &WorldState,
+    uri: &lsp_types::Url,
+    context: &EnumContext,
+) -> Option<(String, Vec<String>)> {
+    let type_info = match context {
+        EnumContext::Direct {
+            qualifier_byte_offset,
+            ..
+        } => {
+            let doc = state.documents.get(uri)?;
+            let source = doc.source();
+            let ctx = identifier_context_at_offset(
+                &doc.tree,
+                &source,
+                &doc.symbol_table,
+                *qualifier_byte_offset,
+            )?;
+            ctx.symbol?.type_info.as_deref()?.trim().to_string()
+        }
+        EnumContext::Member { .. } => return None,
+    };
+
+    let (object_kind, _) = extract_type_object_name(&type_info)?;
+    if !object_kind.eq_ignore_ascii_case("option") {
+        return None;
+    }
+
+    let members = parse_option_members_from_type_info(&type_info)?;
+    Some((type_info, members))
+}
+
+pub(crate) fn option_value_target_at_offset(
+    state: &WorldState,
+    uri: &lsp_types::Url,
+    tree: &tree_sitter::Tree,
+    source: &str,
+    byte_offset: usize,
+) -> Option<(String, String)> {
+    let usage = enum_value_usage_at_offset(tree, source, byte_offset)?;
+    let (type_info, option_members) = resolve_option_members_from_context(state, uri, &usage.context)?;
+    if option_members
+        .iter()
+        .any(|member| member.eq_ignore_ascii_case(&usage.value_name))
+    {
+        Some((type_info, usage.value_name))
+    } else {
+        None
     }
 }
 
@@ -3098,6 +3223,37 @@ codeunit 50101 Test
     }
 
     #[test]
+    fn test_completion_dot_option_builtin_includes_asinteger() {
+        let source = r#"codeunit 50101 Test
+{
+    procedure DoWork()
+    var
+        Choice: Option First, Second;
+    begin
+        Choice.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Choice.");
+        let labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, line, character))
+                .expect("expected option completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            labels.iter().any(|l| l == "AsInteger"),
+            "expected Option built-in AsInteger method, got: {labels:?}"
+        );
+    }
+
+    #[test]
     fn test_completion_dot_additional_builtin_runtime_types_include_methods() {
         let source = r#"codeunit 50100 Test
 {
@@ -4246,6 +4402,226 @@ codeunit 50100 Test
     }
 
     #[test]
+    fn test_completion_option_values_for_option_variable_qualified_access() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Choice: Option First, "Second Value";
+    begin
+        if Choice = Choice:: then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Choice::");
+        let labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, line, character))
+                .expect("expected option member completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+
+        assert!(
+            labels.iter().any(|l| l == "First"),
+            "expected First option member in completion, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Second Value"),
+            "expected quoted option member in completion, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_global_and_parameter_option_builtins() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option First, "Second Value";
+
+    procedure Run(LocalChoice: Option Alpha, Beta)
+    begin
+        GlobalChoice.
+        LocalChoice.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (global_line, global_character) = cursor_after(source, "GlobalChoice.");
+        let global_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), global_line, global_character),
+            )
+            .expect("expected global option completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            global_labels.iter().any(|l| l == "AsInteger"),
+            "expected Option built-in AsInteger for global variable, got: {global_labels:?}"
+        );
+
+        let (param_line, param_character) = cursor_after(source, "LocalChoice.");
+        let param_labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, param_line, param_character))
+                .expect("expected parameter option completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            param_labels.iter().any(|l| l == "AsInteger"),
+            "expected Option built-in AsInteger for parameter, got: {param_labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_option_values_for_global_and_parameter_option_variables() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        GlobalChoice: Option First, "Second Value";
+
+    procedure Run(LocalChoice: Option Alpha, Beta)
+    begin
+        if GlobalChoice = GlobalChoice:: then;
+        if LocalChoice = LocalChoice:: then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (global_line, global_character) = cursor_after(source, "GlobalChoice::");
+        let global_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), global_line, global_character),
+            )
+            .expect("expected global option member completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            global_labels.iter().any(|l| l == "First")
+                && global_labels.iter().any(|l| l == "Second Value"),
+            "expected global option members, got: {global_labels:?}"
+        );
+
+        let (param_line, param_character) = cursor_after(source, "LocalChoice::");
+        let param_labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, param_line, param_character))
+                .expect("expected parameter option member completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            param_labels.iter().any(|l| l == "Alpha")
+                && param_labels.iter().any(|l| l == "Beta"),
+            "expected parameter option members, got: {param_labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_exact_option_parameter_and_local_variable_usage() {
+        let source = r#"codeunit 50100 Dummy
+{
+    procedure HelloWithOptions(OptionParameter : Option Alpha, "Bra-vo")
+    var
+        OptionVariable : Option C, "or D";
+    begin
+        Message('%1',OptionParameter::);
+        Message('%1',OptionVariable::);
+        OptionParameter.
+        OptionVariable.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (param_enum_line, param_enum_char) = cursor_after(source, "OptionParameter::");
+        let param_enum_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), param_enum_line, param_enum_char),
+            )
+            .expect("expected option parameter member completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            param_enum_labels.iter().any(|l| l == "Alpha")
+                && param_enum_labels.iter().any(|l| l == "Bra-vo"),
+            "expected parameter option members Alpha/Bra-vo, got: {param_enum_labels:?}"
+        );
+
+        let (var_enum_line, var_enum_char) = cursor_after(source, "OptionVariable::");
+        let var_enum_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), var_enum_line, var_enum_char),
+            )
+            .expect("expected option variable member completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            var_enum_labels.iter().any(|l| l == "C")
+                && var_enum_labels.iter().any(|l| l == "or D"),
+            "expected variable option members C/or D, got: {var_enum_labels:?}"
+        );
+
+        let (param_dot_line, param_dot_char) = cursor_after(source, "OptionParameter.");
+        let param_dot_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), param_dot_line, param_dot_char),
+            )
+            .expect("expected option parameter dot completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            param_dot_labels.iter().any(|l| l == "AsInteger"),
+            "expected parameter option built-in AsInteger, got: {param_dot_labels:?}"
+        );
+
+        let (var_dot_line, var_dot_char) = cursor_after(source, "OptionVariable.");
+        let var_dot_labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, var_dot_line, var_dot_char))
+                .expect("expected option variable dot completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            var_dot_labels.iter().any(|l| l == "AsInteger"),
+            "expected variable option built-in AsInteger, got: {var_dot_labels:?}"
+        );
+    }
+
+    #[test]
     fn test_completion_enum_values_for_record_field_with_slash_after_tablerelation_if_else() {
         let enum_source = r#"enum 50100 "Dummy KDS-Trigger Sends"
 {
@@ -4526,6 +4902,37 @@ codeunit 50101 "My Subscriber"
         assert!(
             labels.iter().any(|l| l == "CalcFormula"),
             "expected CalcFormula property, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_field_property_names_include_decimalplaces() {
+        let source = r#"table 50100 MyTable
+{
+    fields
+    {
+        field(1; "Amount"; Decimal)
+        {
+            De
+        }
+    }
+}"#;
+        let uri = Url::parse("file:///test/table.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let params = make_completion_params(uri, 6, 14);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "DecimalPlaces"),
+            "expected DecimalPlaces property, got: {labels:?}"
         );
     }
 

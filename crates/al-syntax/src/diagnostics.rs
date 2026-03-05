@@ -716,6 +716,56 @@ codeunit 50101 "My Subscriber"
     }
 
     #[test]
+    fn test_no_errors_for_decimalplaces_property_variants() {
+        let source = r#"table 50100 "Dummy Numbers"
+{
+    fields
+    {
+        field(1; AmountA; Decimal)
+        {
+            DecimalPlaces = 1:4;
+        }
+        field(2; AmountB; Decimal)
+        {
+            DecimalPlaces = :2;
+        }
+        field(3; AmountC; Decimal)
+        {
+            DecimalPlaces = 2:;
+        }
+    }
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no errors for DecimalPlaces property values, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn test_no_errors_for_exact_option_parameter_and_local_variable_declarations() {
+        let source = r#"codeunit 50100 Dummy
+{
+    procedure HelloWithOptions(OptionParameter : Option Alpha, "Bra-vo")
+    var
+        OptionVariable : Option C, "or D";
+    begin
+        Message('%1',OptionParameter::Alpha);
+        Message('%1',OptionVariable::C);
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no syntax errors for exact option parameter/local declaration sample, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
     fn test_errors_for_invalid_code() {
         let source = r#"codeunit 50100 Test
 {

@@ -1246,6 +1246,21 @@
     }
   },
   {
+    "type": "decimal_places_value",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "integer_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "dictionary_type",
     "named": true,
     "fields": {
@@ -3591,6 +3606,10 @@
           },
           {
             "type": "decimal_literal",
+            "named": true
+          },
+          {
+            "type": "decimal_places_value",
             "named": true
           },
           {

@@ -8,6 +8,7 @@ use crate::builtins::find_builtin_method;
 use crate::convert::lsp_position_to_byte_offset;
 use crate::handlers::completion::{
     enum_value_target_at_offset, find_table_field_type, member_access_target_at_offset,
+    option_value_target_at_offset,
 };
 use crate::handlers::events::{event_subscriber_context_at_offset, find_event_publishers};
 use crate::state::WorldState;
@@ -18,8 +19,11 @@ pub fn handle_hover(state: &WorldState, params: HoverParams) -> Option<Hover> {
 
     let doc = state.documents.get(&uri)?;
     let byte_offset = lsp_position_to_byte_offset(&doc.rope, position)?;
-    let source = doc.source();
-    let enum_target = enum_value_target_at_offset(state, &uri, &doc.tree, &source, byte_offset);
+    let source = doc.source_arc();
+    let source_ref = source.as_ref();
+    let enum_target = enum_value_target_at_offset(state, &uri, &doc.tree, source_ref, byte_offset);
+    let option_target =
+        option_value_target_at_offset(state, &uri, &doc.tree, source_ref, byte_offset);
     drop(doc);
 
     if let Some((enum_name, value_name)) = enum_target {
@@ -45,6 +49,16 @@ pub fn handle_hover(state: &WorldState, params: HoverParams) -> Option<Hover> {
                 }
             }
         }
+    }
+
+    if let Some((type_info, value_name)) = option_target {
+        return Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: format!("```al\noption value {} ({})\n```", value_name, type_info),
+            }),
+            range: None,
+        });
     }
 
     let doc = state.documents.get(&uri)?;
@@ -276,6 +290,86 @@ codeunit 50100 Test
             content.value.contains("enum value") && content.value.contains("Order"),
             "expected enum value hover, got: {}",
             content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_option_variable_qualified_value() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Choice: Option First, "Second Value";
+    begin
+        if Choice = Choice::"Second Value" then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, mut character) = cursor_on(source, "Choice::\"Second Value\"");
+        character += "Choice::".len() as u32;
+        let hover = handle_hover(&state, make_hover_params(uri, line, character))
+            .expect("expected hover result");
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("option value") && content.value.contains("Second Value"),
+            "expected option value hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_exact_option_parameter_and_local_variable_values() {
+        let source = r#"codeunit 50100 Dummy
+{
+    procedure HelloWithOptions(OptionParameter : Option Alpha, "Bra-vo")
+    var
+        OptionVariable : Option C, "or D";
+    begin
+        Message('%1',OptionParameter::Alpha);
+        Message('%1',OptionVariable::C);
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (param_line, mut param_char) = cursor_on(source, "OptionParameter::Alpha");
+        param_char += "OptionParameter::".len() as u32;
+        let param_hover = handle_hover(&state, make_hover_params(uri.clone(), param_line, param_char))
+            .expect("expected hover result for option parameter");
+        let HoverContents::Markup(param_content) = param_hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            param_content.value.contains("option value")
+                && param_content.value.contains("Alpha")
+                && param_content.value.contains("Option Alpha, \"Bra-vo\""),
+            "expected option parameter hover, got: {}",
+            param_content.value
+        );
+
+        let (var_line, mut var_char) = cursor_on(source, "OptionVariable::C");
+        var_char += "OptionVariable::".len() as u32;
+        let var_hover = handle_hover(&state, make_hover_params(uri, var_line, var_char))
+            .expect("expected hover result for option variable");
+        let HoverContents::Markup(var_content) = var_hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            var_content.value.contains("option value")
+                && var_content.value.contains("C")
+                && var_content.value.contains("Option C, \"or D\""),
+            "expected option variable hover, got: {}",
+            var_content.value
         );
     }
 
