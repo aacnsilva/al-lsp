@@ -721,7 +721,7 @@ module.exports = grammar({
     // ─── Variable declarations ───────────────────────────────
 
     var_section: ($) =>
-      seq(kw("var"), repeat1($.variable_declaration)),
+      seq(kw("var"), repeat($.variable_declaration)),
 
     variable_declaration: ($) =>
       seq(
@@ -1096,7 +1096,9 @@ module.exports = grammar({
         $.record_type,
         $.codeunit_type,
         $.page_type,
+        $.testpage_type,
         $.report_type,
+        $.testrequestpage_type,
         $.query_type,
         $.xmlport_type,
         $.enum_type,
@@ -1119,7 +1121,9 @@ module.exports = grammar({
         $.record_type,
         $.codeunit_type,
         $.page_type,
+        $.testpage_type,
         $.report_type,
+        $.testrequestpage_type,
         $.query_type,
         $.xmlport_type,
         $.enum_type,
@@ -1152,8 +1156,14 @@ module.exports = grammar({
     page_type: ($) =>
       seq(kw("page"), field("name", choice($.identifier, $.quoted_identifier))),
 
+    testpage_type: ($) =>
+      seq(kw("testpage"), field("name", choice($.identifier, $.quoted_identifier))),
+
     report_type: ($) =>
       seq(kw("report"), field("name", choice($.identifier, $.quoted_identifier))),
+
+    testrequestpage_type: ($) =>
+      seq(kw("testrequestpage"), field("name", choice($.identifier, $.quoted_identifier))),
 
     query_type: ($) =>
       seq(kw("query"), field("name", choice($.identifier, $.quoted_identifier))),

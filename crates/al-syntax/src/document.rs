@@ -1,5 +1,6 @@
 use lsp_types::Diagnostic;
 use ropey::Rope;
+use std::sync::Arc;
 use tree_sitter::Tree;
 
 use crate::ast::{extract_symbols, AlSymbol};
@@ -9,6 +10,7 @@ use crate::symbols::DocumentSymbolTable;
 /// A document's state: source text (as Rope), parse tree, symbols, and diagnostics.
 pub struct DocumentState {
     pub rope: Rope,
+    source_text: Arc<str>,
     pub tree: Tree,
     pub symbol_table: DocumentSymbolTable,
     pub diagnostics: Vec<Diagnostic>,
@@ -34,6 +36,7 @@ impl DocumentState {
 
         Some(DocumentState {
             rope,
+            source_text: Arc::<str>::from(source),
             tree,
             symbol_table,
             diagnostics,
@@ -75,6 +78,7 @@ impl DocumentState {
 
         // Re-parse incrementally
         let full_source = self.rope.to_string();
+        self.source_text = Arc::<str>::from(full_source.clone());
         if let Some(new_tree) = al_parser::parse_with(&full_source, Some(&self.tree)) {
             let symbols = extract_symbols(&new_tree, &full_source);
             self.diagnostics = extract_diagnostics(&new_tree, &full_source);
@@ -87,6 +91,7 @@ impl DocumentState {
     /// Used when applying full-document changes.
     pub fn reparse_full(&mut self, source: &str) {
         self.rope = Rope::from_str(source);
+        self.source_text = Arc::<str>::from(source);
         if let Some(new_tree) = al_parser::parse(source) {
             let symbols = extract_symbols(&new_tree, source);
             self.diagnostics = extract_diagnostics(&new_tree, source);
@@ -101,8 +106,13 @@ impl DocumentState {
     }
 
     /// Get current source text.
-    pub fn source(&self) -> String {
-        self.rope.to_string()
+    pub fn source(&self) -> &str {
+        &self.source_text
+    }
+
+    /// Get current source as shared immutable text.
+    pub fn source_arc(&self) -> Arc<str> {
+        self.source_text.clone()
     }
 }
 

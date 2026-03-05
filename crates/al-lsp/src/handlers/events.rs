@@ -8,6 +8,8 @@ use al_syntax::symbols::DocumentSymbolTable;
 
 use crate::state::WorldState;
 
+const MAX_EVENT_COMPLETION_ITEMS: usize = 200;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EventTarget {
     pub object_kind: String,
@@ -294,19 +296,23 @@ pub(crate) fn event_subscriber_completion_items(
                 "ObjectType::Query",
             ] {
                 let lower = label.to_ascii_lowercase();
-                let suffix = label.split("::").nth(1).unwrap_or("").to_ascii_lowercase();
-                if !prefix_lower.is_empty()
-                    && !lower.starts_with(prefix_lower)
-                    && !suffix.starts_with(prefix_lower)
+                let suffix = label.split("::").nth(1).unwrap_or("");
+                if !matches_prefix_ci(&lower, prefix_lower)
+                    && !matches_prefix_ci(suffix, prefix_lower)
                 {
                     continue;
                 }
-                items.push(CompletionItem {
-                    label: label.to_string(),
-                    kind: Some(CompletionItemKind::ENUM_MEMBER),
-                    detail: Some("EventSubscriber object type".to_string()),
-                    ..Default::default()
-                });
+                if !push_completion_item(
+                    &mut items,
+                    CompletionItem {
+                        label: label.to_string(),
+                        kind: Some(CompletionItemKind::ENUM_MEMBER),
+                        detail: Some("EventSubscriber object type".to_string()),
+                        ..Default::default()
+                    },
+                ) {
+                    break;
+                }
             }
             if items.is_empty() {
                 None
@@ -318,39 +324,82 @@ pub(crate) fn event_subscriber_completion_items(
             let object_kind = ctx.object_kind.as_deref()?;
             let mut items = Vec::new();
             let mut seen = HashSet::new();
+            let object_kind_lower = object_kind.to_ascii_lowercase();
+            let prefix = object_ref_prefix_for_kind(object_kind);
 
-            for entry in state.documents.iter() {
-                for symbol in &entry.value().symbol_table.symbols {
-                    let AlSymbolKind::Object(kind) = symbol.kind else {
-                        continue;
-                    };
-                    if !kind.label().eq_ignore_ascii_case(object_kind) {
-                        continue;
-                    }
+            for entry in state.object_index.iter() {
+                let (kind, object_name_lower) = entry.key();
+                if kind != &object_kind_lower {
+                    continue;
+                }
+                let escaped_name = object_name_lower.replace('"', "\"\"");
+                let label = format!("{prefix}::\"{escaped_name}\"");
+                if !matches_prefix_ci(&label, prefix_lower)
+                    && !matches_prefix_ci(object_name_lower, prefix_lower)
+                {
+                    continue;
+                }
 
-                    let prefix = object_ref_prefix_for_kind(object_kind);
-                    let escaped_name = symbol.name.replace('"', "\"\"");
-                    let label = format!("{prefix}::\"{escaped_name}\"");
-                    let label_lower = label.to_ascii_lowercase();
-                    let name_lower = symbol.name.to_ascii_lowercase();
-                    if !prefix_lower.is_empty()
-                        && !label_lower.starts_with(prefix_lower)
-                        && !name_lower.starts_with(prefix_lower)
-                    {
-                        continue;
-                    }
+                let key = format!("{object_kind_lower}::{object_name_lower}");
+                if !seen.insert(key) {
+                    continue;
+                }
 
-                    let key = format!("{}::{}", object_kind.to_ascii_lowercase(), name_lower);
-                    if !seen.insert(key) {
-                        continue;
-                    }
-
-                    items.push(CompletionItem {
+                if !push_completion_item(
+                    &mut items,
+                    CompletionItem {
                         label,
                         kind: Some(CompletionItemKind::CLASS),
                         detail: Some(format!("{object_kind} object")),
                         ..Default::default()
-                    });
+                    },
+                ) {
+                    break;
+                }
+            }
+
+            if items.is_empty() {
+                for entry in state.documents.iter() {
+                    for symbol in &entry.value().symbol_table.symbols {
+                        let AlSymbolKind::Object(kind) = symbol.kind else {
+                            continue;
+                        };
+                        if !kind.label().eq_ignore_ascii_case(object_kind) {
+                            continue;
+                        }
+
+                        let escaped_name = symbol.name.replace('"', "\"\"");
+                        let label = format!("{prefix}::\"{escaped_name}\"");
+                        if !matches_prefix_ci(&label, prefix_lower)
+                            && !matches_prefix_ci(&symbol.name, prefix_lower)
+                        {
+                            continue;
+                        }
+
+                        let key = format!(
+                            "{}::{}",
+                            object_kind.to_ascii_lowercase(),
+                            symbol.name.to_lowercase()
+                        );
+                        if !seen.insert(key) {
+                            continue;
+                        }
+
+                        if !push_completion_item(
+                            &mut items,
+                            CompletionItem {
+                                label,
+                                kind: Some(CompletionItemKind::CLASS),
+                                detail: Some(format!("{object_kind} object")),
+                                ..Default::default()
+                            },
+                        ) {
+                            break;
+                        }
+                    }
+                    if items.len() >= MAX_EVENT_COMPLETION_ITEMS {
+                        break;
+                    }
                 }
             }
 
@@ -373,18 +422,23 @@ pub(crate) fn event_subscriber_completion_items(
                 collect_event_publisher_names_for_object(state, object_kind, object_name)
             {
                 let event_lower = event_name.to_ascii_lowercase();
-                if !prefix_lower.is_empty() && !event_lower.starts_with(prefix_lower) {
+                if !matches_prefix_ci(&event_lower, prefix_lower) {
                     continue;
                 }
                 if !seen.insert(event_lower) {
                     continue;
                 }
-                items.push(CompletionItem {
-                    label: event_name,
-                    kind: Some(CompletionItemKind::EVENT),
-                    detail: Some("Published event".to_string()),
-                    ..Default::default()
-                });
+                if !push_completion_item(
+                    &mut items,
+                    CompletionItem {
+                        label: event_name,
+                        kind: Some(CompletionItemKind::EVENT),
+                        detail: Some("Published event".to_string()),
+                        ..Default::default()
+                    },
+                ) {
+                    break;
+                }
             }
 
             if items.is_empty() {
@@ -404,11 +458,24 @@ fn collect_event_publisher_names_for_object(
 ) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
+    let object_key = (
+        object_kind.to_ascii_lowercase(),
+        object_name.to_ascii_lowercase(),
+    );
+    let mut candidate_uris: Vec<Url> = Vec::new();
 
-    for entry in state.documents.iter() {
-        let doc = entry.value();
+    if let Some(indexed_entries) = state.object_index.get(&object_key) {
+        let mut uri_seen = HashSet::new();
+        for indexed in indexed_entries.iter() {
+            if uri_seen.insert(indexed.uri.clone()) {
+                candidate_uris.push(indexed.uri.clone());
+            }
+        }
+    }
+
+    let mut collect_from_doc = |doc: &al_syntax::document::DocumentState| {
         let source = doc.source();
-        for publisher in collect_event_publishers_in_tree(&doc.tree, &source) {
+        for publisher in collect_event_publishers_in_tree(&doc.tree, source) {
             if !publisher
                 .target
                 .object_kind
@@ -426,9 +493,48 @@ fn collect_event_publisher_names_for_object(
             }
             names.push(publisher.target.event_name);
         }
+    };
+
+    if candidate_uris.is_empty() {
+        for entry in state.documents.iter() {
+            collect_from_doc(&entry.value());
+        }
+    } else {
+        for uri in candidate_uris {
+            if let Some(doc) = state.documents.get(&uri) {
+                collect_from_doc(&doc);
+            }
+        }
     }
 
     names
+}
+
+fn push_completion_item(items: &mut Vec<CompletionItem>, item: CompletionItem) -> bool {
+    if items.len() >= MAX_EVENT_COMPLETION_ITEMS {
+        return false;
+    }
+    items.push(item);
+    true
+}
+
+fn matches_prefix_ci(candidate: &str, prefix_lower: &str) -> bool {
+    if prefix_lower.is_empty() {
+        return true;
+    }
+    let cand = candidate.as_bytes();
+    let pref = prefix_lower.as_bytes();
+    if cand.len() < pref.len() {
+        return false;
+    }
+    for i in 0..pref.len() {
+        let b = cand[i];
+        let folded = if b.is_ascii_uppercase() { b + 32 } else { b };
+        if folded != pref[i] {
+            return false;
+        }
+    }
+    true
 }
 
 fn collect_event_publishers_in_tree(

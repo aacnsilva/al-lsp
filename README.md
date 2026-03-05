@@ -10,9 +10,9 @@ A Language Server Protocol (LSP) implementation for the AL programming language 
 | **Go to Implementation** | From an interface method to all implementing codeunit procedures across open documents. |
 | **Go to Type Definition** | Resolves variable types to their object declarations (Record, Codeunit, Page, etc.). |
 | **Find References** | Scope-aware, cross-document. Supports interface methods, implementation procedures, and interface-typed method calls. Respects shadowing. |
-| **Hover** | Displays symbol kind/name/type, including qualified enum values and inferred record field types when symbol metadata is incomplete. |
-| **Completion** | Triggered by `.` and `::`. Includes scoped symbols, enum values (`Enum::Value` and `Rec."Enum Field"::Value`), and `TableRelation`/`WHERE` value expression contexts. |
-| **Signature Help** | Triggered by `(` and `,`. Shows procedure signatures with active parameter tracking. |
+| **Hover** | Displays symbol kind/name/type, including qualified enum values, inferred record field types, and built-in method signatures/summaries with Microsoft Learn links (covering the full AL runtime data-type method library list). |
+| **Completion** | Triggered by `.` and `::`. Includes scoped symbols, enum values (`Enum::Value` and `Rec."Enum Field"::Value`), `TableRelation`/`WHERE` value expression contexts, built-in method/property documentation, and chained built-in return-type inference (including no-`()` calls for zero-parameter methods). Built-in datatype methods are aligned with the Microsoft Learn AL method library tables. |
+| **Signature Help** | Triggered by `(` and `,`. Shows procedure signatures with active parameter tracking for both user-defined and built-in methods (including runtime data types from the AL method library). |
 | **Document Symbols** | Nested hierarchical view (objects > procedures > variables). |
 | **Workspace Symbol** | Search across all open documents. Case-insensitive substring matching. |
 | **Rename** | Renames variables, parameters, procedures, and fields. Auto-quotes names with spaces. |
@@ -160,7 +160,7 @@ Logical (`or`, `xor`, `and`, `not`), comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`
 
 ### Type References
 
-`simple_type`, `sized_type` (e.g. `Code[20]`), `Record` (with optional `temporary`), `Enum`, `Interface`, `List of [Type]`, `array [N] of Type`, `Option`, `Label`, `DotNet`
+`simple_type`, `sized_type` (e.g. `Code[20]`), `Record` (with optional `temporary`), `Enum`, `Interface`, `List of [Type]`, `Dictionary of [K, V]`, `array [N] of Type`, `Option`, `Label`, `DotNet`, and runtime method-heavy types such as `Text`/`SecretText`/`TextBuilder`/`TextConst`, `Any`/`Boolean`/`Byte`/`Integer`/`Decimal`/`BigInteger`, `Guid`, `Date`/`DateFormula`/`Time`/`DateTime`/`Duration`, `InStream`/`OutStream`, `JsonObject`/`JsonArray`/`JsonToken`/`JsonValue`, `HttpClient` family, `XmlDocument` family (`XmlAttributeCollection`, `XmlCData`, `XmlComment`, `XmlDeclaration`, `XmlDocumentType`, `XmlNamespaceManager`, `XmlNameTable`, `XmlProcessingInstruction`, `XmlReadOptions`, `XmlText`, `XmlWriteOptions`), `RecordId`, `Variant`, `ErrorInfo`, `SessionSettings`, `Notification`, `Dialog`, `Session`/`SessionInformation`, `Database`, `System`, `TaskScheduler`, `FilterPageBuilder`, `Blob`, `File`/`FileUpload`, `Version`, `NavApp`, `ModuleInfo`/`ModuleDependencyInfo`, `Media`/`MediaSet`, `NumberSequence`, `CompanyProperty`/`ProductName`/`IsolatedStorage`/`Cookie`/`DataTransfer`/`Debugger`/`RequestPage`/`WebServiceActionContext`, `TestPage`/`TestField`/`TestAction`/`TestRequestPage`/`TestPart`/`TestFilter`/`TestFilterField`/`TestHttpRequestMessage`/`TestHttpResponseMessage`, and `RecordRef`/`FieldRef`/`KeyRef`
 
 ## License
 

@@ -1,17 +1,26 @@
 use std::collections::HashSet;
 
-use lsp_types::{CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse};
+use lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, Documentation,
+    MarkupContent, MarkupKind, Url,
+};
 
-use al_syntax::ast::{extract_name, AlSymbolKind};
+use al_syntax::ast::{extract_name, AlSymbol, AlSymbolKind};
 use al_syntax::document::DocumentState;
 use al_syntax::navigation::{
     extract_type_object_name, identifier_context_at_offset, node_at_offset,
 };
 use al_syntax::symbols::al_keywords;
 
+use crate::builtins::{
+    builtin_method_return_type, builtin_object_kind_from_name, literal_values_for_property,
+    methods_for_object_kind, missing_methods_for_object_kind, properties_for_scope,
+};
 use crate::convert::lsp_position_to_byte_offset;
 use crate::handlers::events::event_subscriber_completion_items;
 use crate::state::WorldState;
+
+const MAX_COMPLETION_ITEMS: usize = 200;
 
 #[derive(Debug, Clone)]
 pub(crate) enum EnumContext {
@@ -48,19 +57,22 @@ pub fn handle_completion(
 
     let doc = state.documents.get(&uri)?;
     let byte_offset = lsp_position_to_byte_offset(&doc.rope, position)?;
-    let source = doc.source();
-    let prefix_lower = extract_prefix(&source, byte_offset).to_lowercase();
-
-    let enum_context = enum_context_at_offset(&doc.tree, &source, byte_offset);
+    let source = doc.source_arc();
+    let source_ref = source.as_ref();
+    let prefix_lower = extract_prefix(source_ref, byte_offset).to_ascii_lowercase();
+    let member_access_context = is_member_access_context(source_ref, byte_offset);
+    let enum_context = enum_context_at_offset(&doc.tree, source_ref, byte_offset);
     let where_value_context =
-        where_value_completion_context_at_offset(&doc.tree, &source, byte_offset);
-    let property_context = property_completion_context_at_offset(&doc.tree, &source, byte_offset);
-    let event_items = event_subscriber_completion_items(state, &source, byte_offset, &prefix_lower);
-    let dot_target = dot_target_at_offset(state, &doc, &source, byte_offset);
+        where_value_completion_context_at_offset(&doc.tree, source_ref, byte_offset);
+    let property_context =
+        property_completion_context_at_offset(&doc.tree, source_ref, byte_offset);
+    let dot_target = dot_target_at_offset(state, &doc, source_ref, byte_offset);
 
     drop(doc);
 
-    if let Some(items) = event_items {
+    if let Some(items) =
+        event_subscriber_completion_items(state, source_ref, byte_offset, &prefix_lower)
+    {
         if !items.is_empty() {
             return Some(CompletionResponse::Array(items));
         }
@@ -76,11 +88,21 @@ pub fn handle_completion(
     }
 
     if let Some((object_kind, object_name)) = dot_target {
-        let object_items =
-            collect_object_member_completions(state, &object_kind, &object_name, &prefix_lower);
+        let object_items = collect_object_member_completions(
+            state,
+            &uri,
+            &object_kind,
+            &object_name,
+            &prefix_lower,
+        );
         if !object_items.is_empty() {
             return Some(CompletionResponse::Array(object_items));
         }
+        if member_access_context {
+            return None;
+        }
+    } else if member_access_context {
+        return None;
     }
 
     if where_value_context {
@@ -110,29 +132,39 @@ pub fn handle_completion(
     // Add reachable symbols.
     let reachable = doc.symbol_table.reachable_symbols(byte_offset);
     for sym in reachable {
-        if !prefix_lower.is_empty() && !sym.name.to_lowercase().starts_with(&prefix_lower) {
+        if !matches_prefix_ci(&sym.name, &prefix_lower) {
             continue;
         }
 
-        items.push(CompletionItem {
-            label: sym.name.clone(),
-            kind: Some(completion_item_kind(sym.kind)),
-            detail: sym.type_info.clone(),
-            ..Default::default()
-        });
+        if !push_completion_item(
+            &mut items,
+            CompletionItem {
+                label: sym.name.clone(),
+                kind: Some(completion_item_kind(sym.kind)),
+                detail: sym.type_info.clone(),
+                ..Default::default()
+            },
+        ) {
+            break;
+        }
     }
 
     // Add keywords.
     for &kw in al_keywords() {
-        if !prefix_lower.is_empty() && !kw.to_lowercase().starts_with(&prefix_lower) {
+        if !matches_prefix_ci(kw, &prefix_lower) {
             continue;
         }
 
-        items.push(CompletionItem {
-            label: kw.to_string(),
-            kind: Some(CompletionItemKind::KEYWORD),
-            ..Default::default()
-        });
+        if !push_completion_item(
+            &mut items,
+            CompletionItem {
+                label: kw.to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                ..Default::default()
+            },
+        ) {
+            break;
+        }
     }
 
     if items.is_empty() {
@@ -142,28 +174,91 @@ pub fn handle_completion(
     Some(CompletionResponse::Array(items))
 }
 
+fn push_completion_item(items: &mut Vec<CompletionItem>, item: CompletionItem) -> bool {
+    if items.len() >= MAX_COMPLETION_ITEMS {
+        return false;
+    }
+    items.push(item);
+    true
+}
+
+fn matches_prefix_ci(candidate: &str, prefix_lower: &str) -> bool {
+    if prefix_lower.is_empty() {
+        return true;
+    }
+    let cand = candidate.as_bytes();
+    let pref = prefix_lower.as_bytes();
+    if cand.len() < pref.len() {
+        return false;
+    }
+    for i in 0..pref.len() {
+        let b = cand[i];
+        let folded = if b.is_ascii_uppercase() { b + 32 } else { b };
+        if folded != pref[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_member_access_context(source: &str, byte_offset: usize) -> bool {
+    let bytes = source.as_bytes();
+    if bytes.is_empty() || byte_offset == 0 {
+        return false;
+    }
+
+    let mut cursor = byte_offset.min(bytes.len());
+    while cursor > 0 && bytes[cursor - 1].is_ascii_whitespace() {
+        cursor -= 1;
+    }
+    if cursor == 0 {
+        return false;
+    }
+
+    if bytes[cursor - 1] == b'.' {
+        return true;
+    }
+
+    let mut ident_start = cursor;
+    while ident_start > 0 {
+        let b = bytes[ident_start - 1];
+        if b.is_ascii_alphanumeric() || b == b'_' || b == b'"' {
+            ident_start -= 1;
+        } else {
+            break;
+        }
+    }
+
+    let mut probe = ident_start;
+    while probe > 0 && bytes[probe - 1].is_ascii_whitespace() {
+        probe -= 1;
+    }
+
+    probe > 0 && bytes[probe - 1] == b'.'
+}
+
 fn collect_object_member_completions(
     state: &WorldState,
+    caller_uri: &Url,
     object_kind: &str,
     object_name: &str,
     prefix_lower: &str,
 ) -> Vec<CompletionItem> {
+    if object_kind.eq_ignore_ascii_case("table") {
+        return collect_record_variable_completions(state, caller_uri, object_name, prefix_lower);
+    }
+
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
-    for entry in state.documents.iter() {
-        for symbol in &entry.value().symbol_table.symbols {
-            if let AlSymbolKind::Object(kind) = symbol.kind {
-                if !kind.label().eq_ignore_ascii_case(object_kind)
-                    || !symbol.name.eq_ignore_ascii_case(object_name)
-                {
-                    continue;
-                }
-
-                for child in &symbol.children {
-                    if !prefix_lower.is_empty()
-                        && !child.name.to_lowercase().starts_with(prefix_lower)
-                    {
+    if supports_symbol_object_lookup(object_kind) {
+        visit_matching_objects(
+            state,
+            object_kind,
+            object_name,
+            |_target_uri, _doc, object_symbol| {
+                for child in &object_symbol.children {
+                    if !matches_prefix_ci(&child.name, prefix_lower) {
                         continue;
                     }
                     let key = child.name.to_lowercase();
@@ -171,39 +266,190 @@ fn collect_object_member_completions(
                         continue;
                     }
 
-                    items.push(CompletionItem {
-                        label: child.name.clone(),
-                        kind: Some(completion_item_kind(child.kind)),
-                        detail: child.type_info.clone(),
-                        ..Default::default()
-                    });
+                    if !push_completion_item(
+                        &mut items,
+                        CompletionItem {
+                            label: child.name.clone(),
+                            kind: Some(completion_item_kind(child.kind)),
+                            detail: child.type_info.clone(),
+                            ..Default::default()
+                        },
+                    ) {
+                        return true;
+                    }
                 }
-            }
-        }
+                false
+            },
+        );
     }
 
-    if let Some(methods) = builtin_methods_for_object_kind(object_kind) {
-        for method in methods {
-            if !prefix_lower.is_empty() && !method.to_lowercase().starts_with(prefix_lower) {
-                continue;
-            }
-            let key = method.to_lowercase();
-            if !seen.insert(key) {
-                continue;
-            }
-            items.push(CompletionItem {
-                label: (*method).to_string(),
+    for method in methods_for_object_kind(object_kind)
+        .iter()
+        .chain(missing_methods_for_object_kind(object_kind).iter())
+    {
+        if !matches_prefix_ci(method.name, prefix_lower) {
+            continue;
+        }
+        let key = method.name.to_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+        if !push_completion_item(
+            &mut items,
+            CompletionItem {
+                label: method.name.to_string(),
                 kind: Some(CompletionItemKind::METHOD),
-                detail: Some(format!(
-                    "Built-in {} method",
-                    object_kind.trim_end_matches("_builtin")
-                )),
+                detail: Some(method.signature.to_string()),
                 ..Default::default()
-            });
+            },
+        ) {
+            break;
         }
     }
 
     items
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableProcedureVisibility {
+    Public,
+    Internal,
+    Hidden,
+}
+
+fn collect_record_variable_completions(
+    state: &WorldState,
+    caller_uri: &Url,
+    table_name: &str,
+    prefix_lower: &str,
+) -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+    let mut seen = HashSet::new();
+
+    visit_matching_objects(
+        state,
+        "table",
+        table_name,
+        |target_uri, doc, object_symbol| {
+            for child in &object_symbol.children {
+                match child.kind {
+                    AlSymbolKind::Field => {}
+                    AlSymbolKind::Procedure => {
+                        let visibility = table_procedure_visibility(doc, child);
+                        if !table_procedure_accessible(caller_uri, target_uri, visibility) {
+                            continue;
+                        }
+                    }
+                    _ => continue,
+                }
+
+                if !matches_prefix_ci(&child.name, prefix_lower) {
+                    continue;
+                }
+
+                let key = child.name.to_lowercase();
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                if !push_completion_item(
+                    &mut items,
+                    CompletionItem {
+                        label: child.name.clone(),
+                        kind: Some(completion_item_kind(child.kind)),
+                        detail: child.type_info.clone(),
+                        ..Default::default()
+                    },
+                ) {
+                    return true;
+                }
+            }
+            false
+        },
+    );
+
+    for method in methods_for_object_kind("table")
+        .iter()
+        .chain(missing_methods_for_object_kind("table").iter())
+    {
+        if !matches_prefix_ci(method.name, prefix_lower) {
+            continue;
+        }
+        let key = method.name.to_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+        if !push_completion_item(
+            &mut items,
+            CompletionItem {
+                label: method.name.to_string(),
+                kind: Some(CompletionItemKind::METHOD),
+                detail: Some(method.signature.to_string()),
+                ..Default::default()
+            },
+        ) {
+            break;
+        }
+    }
+
+    items
+}
+
+fn table_procedure_visibility(
+    doc: &DocumentState,
+    procedure_symbol: &AlSymbol,
+) -> TableProcedureVisibility {
+    let source = doc.source();
+    let start = procedure_symbol.start_byte.min(source.len());
+    let line_start = source[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_end = source[start..]
+        .find('\n')
+        .map(|i| start + i)
+        .unwrap_or(source.len());
+    let sig = source[line_start..line_end]
+        .trim_start()
+        .to_ascii_lowercase();
+
+    if sig.starts_with("local procedure") || sig.starts_with("protected procedure") {
+        return TableProcedureVisibility::Hidden;
+    }
+    if sig.starts_with("internal procedure") {
+        return TableProcedureVisibility::Internal;
+    }
+    if sig.starts_with("procedure") {
+        return TableProcedureVisibility::Public;
+    }
+
+    let ahead_end = source.len().min(start + 80);
+    let ahead = source[start..ahead_end].to_ascii_lowercase();
+    if ahead.starts_with("local procedure") || ahead.starts_with("protected procedure") {
+        TableProcedureVisibility::Hidden
+    } else if ahead.starts_with("internal procedure") {
+        TableProcedureVisibility::Internal
+    } else {
+        TableProcedureVisibility::Public
+    }
+}
+
+fn table_procedure_accessible(
+    caller_uri: &Url,
+    target_uri: &Url,
+    visibility: TableProcedureVisibility,
+) -> bool {
+    match visibility {
+        TableProcedureVisibility::Public => true,
+        TableProcedureVisibility::Hidden => false,
+        TableProcedureVisibility::Internal => internal_access_allowed(caller_uri, target_uri),
+    }
+}
+
+fn internal_access_allowed(caller_uri: &Url, target_uri: &Url) -> bool {
+    if caller_uri.scheme().eq_ignore_ascii_case("alpackage")
+        || target_uri.scheme().eq_ignore_ascii_case("alpackage")
+    {
+        return false;
+    }
+    true
 }
 
 fn collect_enum_value_completions(
@@ -214,21 +460,16 @@ fn collect_enum_value_completions(
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
-    for entry in state.documents.iter() {
-        for symbol in &entry.value().symbol_table.symbols {
-            let AlSymbolKind::Object(kind) = symbol.kind else {
-                continue;
-            };
-            if kind.label() != "enum" || !symbol.name.eq_ignore_ascii_case(enum_name) {
-                continue;
-            }
-
-            for child in &symbol.children {
+    visit_matching_objects(
+        state,
+        "enum",
+        enum_name,
+        |_target_uri, _doc, object_symbol| {
+            for child in &object_symbol.children {
                 if !matches!(child.kind, AlSymbolKind::EnumValue) {
                     continue;
                 }
-                if !prefix_lower.is_empty() && !child.name.to_lowercase().starts_with(prefix_lower)
-                {
+                if !matches_prefix_ci(&child.name, prefix_lower) {
                     continue;
                 }
                 let key = child.name.to_lowercase();
@@ -236,220 +477,48 @@ fn collect_enum_value_completions(
                     continue;
                 }
 
-                items.push(CompletionItem {
-                    label: child.name.clone(),
-                    kind: Some(CompletionItemKind::ENUM_MEMBER),
-                    detail: child.type_info.clone(),
-                    ..Default::default()
-                });
+                if !push_completion_item(
+                    &mut items,
+                    CompletionItem {
+                        label: child.name.clone(),
+                        kind: Some(CompletionItemKind::ENUM_MEMBER),
+                        detail: child.type_info.clone(),
+                        ..Default::default()
+                    },
+                ) {
+                    return true;
+                }
             }
-        }
-    }
+            false
+        },
+    );
 
     items
-}
-
-fn property_names_for_scope(scope: &str) -> &'static [&'static str] {
-    match scope {
-        "table" => &[
-            "Access",
-            "Caption",
-            "DataCaptionFields",
-            "DataClassification",
-            "DataPerCompany",
-            "DrillDownPageID",
-            "LookupPageID",
-            "ObsoleteReason",
-            "ObsoleteState",
-            "ObsoleteTag",
-            "PasteIsValid",
-            "Permissions",
-            "ReplicateData",
-        ],
-        "codeunit" => &[
-            "Access",
-            "EventSubscriberInstance",
-            "ObsoleteReason",
-            "ObsoleteState",
-            "ObsoleteTag",
-            "Permissions",
-            "SingleInstance",
-            "Subtype",
-            "TableNo",
-        ],
-        "page" => &[
-            "Access",
-            "ApplicationArea",
-            "Caption",
-            "DeleteAllowed",
-            "Editable",
-            "InsertAllowed",
-            "LinksAllowed",
-            "ModifyAllowed",
-            "ObsoleteReason",
-            "ObsoleteState",
-            "ObsoleteTag",
-            "PageType",
-            "SourceTable",
-            "UsageCategory",
-        ],
-        "field" => &[
-            "ApplicationArea",
-            "AutoFormatType",
-            "BlankZero",
-            "CalcFormula",
-            "Caption",
-            "DataClassification",
-            "Editable",
-            "FieldClass",
-            "InitValue",
-            "NotBlank",
-            "ObsoleteReason",
-            "ObsoleteState",
-            "ObsoleteTag",
-            "OptionCaption",
-            "OptionMembers",
-            "TableRelation",
-            "ToolTip",
-            "ValidateTableRelation",
-        ],
-        "key" => &[
-            "Clustered",
-            "Enabled",
-            "MaintainSQLIndex",
-            "SumIndexFields",
-            "Unique",
-        ],
-        "enum" => &[
-            "Access",
-            "AssignmentCompatibility",
-            "Caption",
-            "Extensible",
-            "ObsoleteReason",
-            "ObsoleteState",
-            "ObsoleteTag",
-        ],
-        "enumvalue" => &[
-            "Caption",
-            "Implementation",
-            "ObsoleteReason",
-            "ObsoleteState",
-            "ObsoleteTag",
-        ],
-        "report" => &[
-            "Access",
-            "ApplicationArea",
-            "Caption",
-            "DefaultLayout",
-            "ExcelLayout",
-            "ObsoleteReason",
-            "ObsoleteState",
-            "ObsoleteTag",
-            "RDLCLayout",
-            "UsageCategory",
-            "WordLayout",
-        ],
-        "query" => &[
-            "Access",
-            "Caption",
-            "ObsoleteReason",
-            "ObsoleteState",
-            "ObsoleteTag",
-        ],
-        "xmlport" => &[
-            "Access",
-            "Caption",
-            "Direction",
-            "Encoding",
-            "FormatEvaluate",
-            "ObsoleteReason",
-            "ObsoleteState",
-            "ObsoleteTag",
-        ],
-        "interface" => &[
-            "Access",
-            "Caption",
-            "ObsoleteReason",
-            "ObsoleteState",
-            "ObsoleteTag",
-        ],
-        _ => &[],
-    }
 }
 
 fn collect_property_name_completions(scope: &str, prefix_lower: &str) -> Vec<CompletionItem> {
     let mut items = Vec::new();
-    for &name in property_names_for_scope(scope) {
-        if !prefix_lower.is_empty() && !name.to_lowercase().starts_with(prefix_lower) {
+    for property in properties_for_scope(scope) {
+        if !matches_prefix_ci(property.name, prefix_lower) {
             continue;
         }
-        items.push(CompletionItem {
-            label: name.to_string(),
-            kind: Some(CompletionItemKind::PROPERTY),
-            detail: Some(format!("{scope} property")),
-            ..Default::default()
-        });
+        if !push_completion_item(
+            &mut items,
+            CompletionItem {
+                label: property.name.to_string(),
+                kind: Some(CompletionItemKind::PROPERTY),
+                detail: Some(format!("{scope} property")),
+                documentation: Some(Documentation::MarkupContent(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: property.summary.to_string(),
+                })),
+                ..Default::default()
+            },
+        ) {
+            break;
+        }
     }
     items
-}
-
-fn property_value_literals(property_name: &str) -> &'static [&'static str] {
-    match property_name.to_ascii_lowercase().as_str() {
-        "dataclassification" => &[
-            "ToBeClassified",
-            "CustomerContent",
-            "EndUserIdentifiableInformation",
-            "AccountData",
-            "EndUserPseudonymousIdentifiers",
-            "OrganizationIdentifiableInformation",
-            "SystemMetadata",
-        ],
-        "obsoletestate" => &["No", "Pending", "Removed"],
-        "singleinstance" => &["true", "false"],
-        "editable" => &["true", "false"],
-        "insertallowed" => &["true", "false"],
-        "modifyallowed" => &["true", "false"],
-        "deleteallowed" => &["true", "false"],
-        "linksallowed" => &["true", "false"],
-        "enabled" => &["true", "false"],
-        "clustered" => &["true", "false"],
-        "maintainsqlindex" => &["true", "false"],
-        "notblank" => &["true", "false"],
-        "blankzero" => &["true", "false"],
-        "validatetablerelation" => &["true", "false"],
-        "fieldclass" => &["Normal", "FlowField", "FlowFilter"],
-        "pagetype" => &[
-            "Card",
-            "CardPart",
-            "List",
-            "ListPart",
-            "Document",
-            "Worksheet",
-            "RoleCenter",
-            "StandardDialog",
-            "ConfirmationDialog",
-            "NavigatePage",
-            "API",
-            "HeadlinePart",
-        ],
-        "usagecategory" => &[
-            "None",
-            "Lists",
-            "Tasks",
-            "ReportsAndAnalysis",
-            "Documents",
-            "History",
-            "Administration",
-        ],
-        "eventsubscriberinstance" => &["StaticAutomatic", "Manual"],
-        "subtype" => &["Normal", "Install", "Upgrade", "Test", "TestRunner"],
-        "direction" => &["Import", "Export", "Both"],
-        "defaultlayout" => &["None", "RDLC", "Word", "Excel"],
-        "accesstoplevel" => &["Internal", "Public"],
-        "access" => &["Internal", "Public"],
-        "calcformula" => &["Lookup", "Sum", "Average", "Count", "Exist", "Min", "Max"],
-        _ => &[],
-    }
 }
 
 fn collect_object_name_value_completions(
@@ -459,28 +528,63 @@ fn collect_object_name_value_completions(
 ) -> Vec<CompletionItem> {
     let mut items = Vec::new();
     let mut seen = HashSet::new();
+    let object_kind_lower = object_kind.to_ascii_lowercase();
 
-    for entry in state.documents.iter() {
-        for symbol in &entry.value().symbol_table.symbols {
-            let AlSymbolKind::Object(kind) = symbol.kind else {
-                continue;
-            };
-            if !kind.label().eq_ignore_ascii_case(object_kind) {
-                continue;
-            }
-            if !prefix_lower.is_empty() && !symbol.name.to_lowercase().starts_with(prefix_lower) {
-                continue;
-            }
-            let key = symbol.name.to_lowercase();
-            if !seen.insert(key) {
-                continue;
-            }
-            items.push(CompletionItem {
-                label: symbol.name.clone(),
+    for entry in state.object_index.iter() {
+        let (kind, object_name_lower) = entry.key();
+        if kind != &object_kind_lower {
+            continue;
+        }
+        if !matches_prefix_ci(object_name_lower, prefix_lower) {
+            continue;
+        }
+        if !seen.insert(object_name_lower.clone()) {
+            continue;
+        }
+        if !push_completion_item(
+            &mut items,
+            CompletionItem {
+                label: object_name_lower.clone(),
                 kind: Some(CompletionItemKind::CLASS),
                 detail: Some(format!("{object_kind} object")),
                 ..Default::default()
-            });
+            },
+        ) {
+            break;
+        }
+    }
+
+    if items.is_empty() {
+        for entry in state.documents.iter() {
+            for symbol in &entry.value().symbol_table.symbols {
+                let AlSymbolKind::Object(kind) = symbol.kind else {
+                    continue;
+                };
+                if !kind.label().eq_ignore_ascii_case(object_kind) {
+                    continue;
+                }
+                if !matches_prefix_ci(&symbol.name, prefix_lower) {
+                    continue;
+                }
+                let key = symbol.name.to_lowercase();
+                if !seen.insert(key) {
+                    continue;
+                }
+                if !push_completion_item(
+                    &mut items,
+                    CompletionItem {
+                        label: symbol.name.clone(),
+                        kind: Some(CompletionItemKind::CLASS),
+                        detail: Some(format!("{object_kind} object")),
+                        ..Default::default()
+                    },
+                ) {
+                    break;
+                }
+            }
+            if items.len() >= MAX_COMPLETION_ITEMS {
+                break;
+            }
         }
     }
 
@@ -495,20 +599,25 @@ fn collect_property_value_completions(
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
-    for &value in property_value_literals(property_name) {
-        if !prefix_lower.is_empty() && !value.to_lowercase().starts_with(prefix_lower) {
+    for &value in literal_values_for_property(property_name).unwrap_or(&[]) {
+        if !matches_prefix_ci(value, prefix_lower) {
             continue;
         }
         let key = value.to_lowercase();
         if !seen.insert(key) {
             continue;
         }
-        items.push(CompletionItem {
-            label: value.to_string(),
-            kind: Some(CompletionItemKind::VALUE),
-            detail: Some(format!("{property_name} value")),
-            ..Default::default()
-        });
+        if !push_completion_item(
+            &mut items,
+            CompletionItem {
+                label: value.to_string(),
+                kind: Some(CompletionItemKind::VALUE),
+                detail: Some(format!("{property_name} value")),
+                ..Default::default()
+            },
+        ) {
+            break;
+        }
     }
 
     let dynamic_kind = match property_name.to_ascii_lowercase().as_str() {
@@ -523,8 +632,8 @@ fn collect_property_value_completions(
         let dynamic_items = collect_object_name_value_completions(state, kind, prefix_lower);
         for item in dynamic_items {
             let key = item.label.to_lowercase();
-            if seen.insert(key) {
-                items.push(item);
+            if seen.insert(key) && !push_completion_item(&mut items, item) {
+                break;
             }
         }
     }
@@ -535,15 +644,20 @@ fn collect_property_value_completions(
 fn collect_where_value_expression_completions(prefix_lower: &str) -> Vec<CompletionItem> {
     let mut items = Vec::new();
     for value in ["FIELD(", "CONST(", "FILTER("] {
-        if !prefix_lower.is_empty() && !value.to_lowercase().starts_with(prefix_lower) {
+        if !matches_prefix_ci(value, prefix_lower) {
             continue;
         }
-        items.push(CompletionItem {
-            label: value.to_string(),
-            kind: Some(CompletionItemKind::FUNCTION),
-            detail: Some("WHERE value expression".to_string()),
-            ..Default::default()
-        });
+        if !push_completion_item(
+            &mut items,
+            CompletionItem {
+                label: value.to_string(),
+                kind: Some(CompletionItemKind::FUNCTION),
+                detail: Some("WHERE value expression".to_string()),
+                ..Default::default()
+            },
+        ) {
+            break;
+        }
     }
     items
 }
@@ -603,6 +717,11 @@ pub(crate) fn resolve_enum_name_from_context(
 }
 
 fn has_enum_object(state: &WorldState, enum_name: &str) -> bool {
+    let key = ("enum".to_string(), enum_name.to_ascii_lowercase());
+    if state.object_index.contains_key(&key) {
+        return true;
+    }
+
     for entry in state.documents.iter() {
         for symbol in &entry.value().symbol_table.symbols {
             if let AlSymbolKind::Object(kind) = symbol.kind {
@@ -696,41 +815,22 @@ pub(crate) fn find_table_field_type(
     table_name: &str,
     field_name: &str,
 ) -> Option<String> {
-    for entry in state.documents.iter() {
-        let doc = entry.value();
-        let source = doc.source();
-        for symbol in &doc.symbol_table.symbols {
-            let AlSymbolKind::Object(kind) = symbol.kind else {
-                continue;
-            };
-            if kind.label() != "table" || !symbol.name.eq_ignore_ascii_case(table_name) {
-                continue;
+    let mut result = None;
+    visit_matching_objects(
+        state,
+        "table",
+        table_name,
+        |_target_uri, doc, object_symbol| {
+            if let Some(type_info) =
+                find_table_field_type_in_object_symbol(doc, object_symbol, field_name)
+            {
+                result = Some(type_info);
+                return true;
             }
-
-            for child in &symbol.children {
-                if !matches!(child.kind, AlSymbolKind::Field)
-                    || !child.name.eq_ignore_ascii_case(field_name)
-                {
-                    continue;
-                }
-
-                let type_info = child.type_info.as_deref()?;
-                return Some(type_info.to_string());
-            }
-
-            let object_start = symbol.start_byte.min(source.len());
-            let object_end = symbol.end_byte.min(source.len());
-            if object_start < object_end {
-                let object_text = &source[object_start..object_end];
-                if let Some(type_info) =
-                    find_table_field_type_in_object_text(object_text, field_name)
-                {
-                    return Some(type_info);
-                }
-            }
-        }
-    }
-    None
+            false
+        },
+    );
+    result
 }
 
 fn completion_item_kind(kind: AlSymbolKind) -> CompletionItemKind {
@@ -769,7 +869,16 @@ fn dot_target_at_offset(
         }
     }
 
-    let (object_start, object_name) = parse_object_before_trailing_dot(source, byte_offset)?;
+    if let Some((object_start, object_name)) = parse_object_before_trailing_dot(source, byte_offset)
+    {
+        if let Some(target) =
+            resolve_object_type_from_symbol_name(doc, source, &object_name, object_start)
+        {
+            return Some(target);
+        }
+    }
+
+    let (object_start, object_name) = parse_object_before_member_fragment(source, byte_offset)?;
     resolve_object_type_from_symbol_name(doc, source, &object_name, object_start)
 }
 
@@ -885,26 +994,58 @@ fn parse_object_before_trailing_dot(source: &str, byte_offset: usize) -> Option<
     parse_identifier_segment(source, left)
 }
 
+fn parse_object_before_member_fragment(
+    source: &str,
+    byte_offset: usize,
+) -> Option<(usize, String)> {
+    let bytes = source.as_bytes();
+    if bytes.is_empty() || byte_offset == 0 {
+        return None;
+    }
+
+    let mut cursor = byte_offset.min(bytes.len());
+    while cursor > 0 && bytes[cursor - 1].is_ascii_whitespace() {
+        cursor -= 1;
+    }
+    if cursor == 0 {
+        return None;
+    }
+
+    let mut probe = cursor;
+    while probe > 0 {
+        let b = bytes[probe - 1];
+        if b == b'.' {
+            break;
+        }
+        if b == b';' || b == b'\n' || b == b'\r' || b == b'(' || b == b')' || b == b',' || b == b'='
+        {
+            return None;
+        }
+        probe -= 1;
+    }
+    if probe == 0 || bytes[probe - 1] != b'.' {
+        return None;
+    }
+
+    let mut left = probe - 1;
+    while left > 0 && bytes[left - 1].is_ascii_whitespace() {
+        left -= 1;
+    }
+    if left == 0 {
+        return None;
+    }
+
+    parse_identifier_segment(source, left)
+}
+
 fn resolve_object_type_from_symbol_name(
     doc: &DocumentState,
     source: &str,
     object_name: &str,
     scope_byte: usize,
 ) -> Option<(String, String)> {
-    if object_name.eq_ignore_ascii_case("codeunit") {
-        return Some(("codeunit_builtin".to_string(), "CODEUNIT".to_string()));
-    }
-    if object_name.eq_ignore_ascii_case("page") {
-        return Some(("page_builtin".to_string(), "PAGE".to_string()));
-    }
-    if object_name.eq_ignore_ascii_case("report") {
-        return Some(("report_builtin".to_string(), "REPORT".to_string()));
-    }
-    if object_name.eq_ignore_ascii_case("xmlport") {
-        return Some(("xmlport_builtin".to_string(), "XMLPORT".to_string()));
-    }
-    if object_name.eq_ignore_ascii_case("query") {
-        return Some(("query_builtin".to_string(), "QUERY".to_string()));
+    if let Some(object_kind) = builtin_object_kind_from_name(object_name) {
+        return Some((object_kind.to_string(), object_name.to_string()));
     }
 
     let symbol = doc
@@ -919,6 +1060,7 @@ fn resolve_object_type_from_symbol_name(
         });
     let type_info_owned = symbol
         .and_then(|sym| sym.type_info.clone())
+        .or_else(|| fallback_local_variable_type_from_source(source, object_name, scope_byte))
         .or_else(|| fallback_procedure_return_type_from_source(source, object_name));
     let type_info = type_info_owned.as_deref()?;
     let (object_kind, object_name) = extract_type_object_name(type_info)?;
@@ -1035,6 +1177,62 @@ fn fallback_procedure_return_type_from_source(
     None
 }
 
+fn fallback_local_variable_type_from_source(
+    source: &str,
+    variable_name: &str,
+    scope_byte: usize,
+) -> Option<String> {
+    let before = &source[..scope_byte.min(source.len())];
+    let mut best_candidate: Option<String> = None;
+    let name_lower = variable_name.to_ascii_lowercase();
+
+    for line in before.lines().rev() {
+        if let Some(ty) = parse_variable_type_from_line(line, &name_lower) {
+            let ty_trimmed = ty.trim();
+            if ty_trimmed.is_empty() {
+                continue;
+            }
+            if ty_trimmed.to_ascii_lowercase().starts_with("record ") {
+                return Some(ty_trimmed.to_string());
+            }
+            if best_candidate.is_none() {
+                best_candidate = Some(ty_trimmed.to_string());
+            }
+        }
+    }
+
+    best_candidate
+}
+
+fn parse_variable_type_from_line<'a>(line: &'a str, name_lower: &str) -> Option<&'a str> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with("//") {
+        return None;
+    }
+
+    let mut rest = trimmed;
+    if rest.to_ascii_lowercase().starts_with("var ") {
+        rest = rest[4..].trim_start();
+    }
+
+    let colon = rest.find(':')?;
+    let lhs = rest[..colon].trim().trim_matches('"').to_ascii_lowercase();
+    if lhs != name_lower {
+        return None;
+    }
+
+    let rhs_all = rest[colon + 1..].trim_start();
+    let end = rhs_all
+        .find(|c: char| c == ';' || c == ')' || c == ',')
+        .unwrap_or(rhs_all.len());
+    let rhs = rhs_all[..end].trim();
+    if rhs.is_empty() {
+        None
+    } else {
+        Some(rhs)
+    }
+}
+
 fn find_object_member_type(
     state: &WorldState,
     object_kind: &str,
@@ -1042,17 +1240,30 @@ fn find_object_member_type(
     member_name: &str,
     require_procedure: bool,
 ) -> Option<String> {
-    for entry in state.documents.iter() {
-        for symbol in &entry.value().symbol_table.symbols {
-            let AlSymbolKind::Object(kind) = symbol.kind else {
-                continue;
-            };
-            if !kind.label().eq_ignore_ascii_case(object_kind)
-                || !symbol.name.eq_ignore_ascii_case(object_name)
-            {
-                continue;
-            }
-            for child in &symbol.children {
+    if let Some(return_type) = builtin_method_return_type(object_kind, member_name) {
+        if require_procedure
+            || methods_for_object_kind(object_kind)
+                .iter()
+                .chain(missing_methods_for_object_kind(object_kind).iter())
+                .any(|method| {
+                    method.name.eq_ignore_ascii_case(member_name) && method.params.is_empty()
+                })
+        {
+            return Some(return_type.to_string());
+        }
+    }
+
+    if !supports_symbol_object_lookup(object_kind) {
+        return None;
+    }
+
+    let mut resolved = None;
+    visit_matching_objects(
+        state,
+        object_kind,
+        object_name,
+        |_target_uri, doc, object_symbol| {
+            for child in &object_symbol.children {
                 if !child.name.eq_ignore_ascii_case(member_name) {
                     continue;
                 }
@@ -1060,149 +1271,120 @@ fn find_object_member_type(
                     continue;
                 }
                 if let Some(type_info) = child.type_info.as_deref() {
-                    return Some(type_info.to_string());
+                    resolved = Some(type_info.to_string());
+                    return true;
                 }
             }
 
             if !require_procedure && object_kind.eq_ignore_ascii_case("table") {
-                if let Some(type_info) = find_table_field_type(state, object_name, member_name) {
-                    return Some(type_info);
+                if let Some(type_info) =
+                    find_table_field_type_in_object_symbol(doc, object_symbol, member_name)
+                {
+                    resolved = Some(type_info);
+                    return true;
                 }
+            }
+            false
+        },
+    );
+
+    resolved
+}
+
+fn find_table_field_type_in_object_symbol(
+    doc: &DocumentState,
+    object_symbol: &AlSymbol,
+    field_name: &str,
+) -> Option<String> {
+    for child in &object_symbol.children {
+        if !matches!(child.kind, AlSymbolKind::Field)
+            || !child.name.eq_ignore_ascii_case(field_name)
+        {
+            continue;
+        }
+        if let Some(type_info) = child.type_info.as_deref() {
+            return Some(type_info.to_string());
+        }
+    }
+
+    let source = doc.source();
+    let object_start = object_symbol.start_byte.min(source.len());
+    let object_end = object_symbol.end_byte.min(source.len());
+    if object_start >= object_end {
+        return None;
+    }
+    find_table_field_type_in_object_text(&source[object_start..object_end], field_name)
+}
+
+fn visit_matching_objects<F>(
+    state: &WorldState,
+    object_kind: &str,
+    object_name: &str,
+    mut visit: F,
+) -> bool
+where
+    F: FnMut(&Url, &DocumentState, &AlSymbol) -> bool,
+{
+    let object_key = (
+        object_kind.to_ascii_lowercase(),
+        object_name.to_ascii_lowercase(),
+    );
+    let mut visited = false;
+
+    if let Some(indexed_entries) = state.object_index.get(&object_key) {
+        for indexed in indexed_entries.iter() {
+            let Some(doc) = state.documents.get(&indexed.uri) else {
+                continue;
+            };
+            let doc_ref = doc.value();
+            let object_symbol = doc_ref.symbol_table.symbols.iter().find(|object| {
+                object.start_byte == indexed.object_start_byte
+                    && matches!(
+                        object.kind,
+                        AlSymbolKind::Object(kind)
+                            if kind.label().eq_ignore_ascii_case(object_kind)
+                                && object.name.eq_ignore_ascii_case(object_name)
+                    )
+            });
+            let Some(object_symbol) = object_symbol else {
+                continue;
+            };
+            visited = true;
+            if visit(&indexed.uri, doc_ref, object_symbol) {
+                return true;
             }
         }
     }
-    None
-}
 
-fn builtin_record_methods() -> &'static [&'static str] {
-    &[
-        "AddLink",
-        "Ascending",
-        "CalcFields",
-        "CalcSums",
-        "ChangeCompany",
-        "Copy",
-        "CopyFilters",
-        "Count",
-        "Delete",
-        "DeleteAll",
-        "DeleteLinks",
-        "Find",
-        "FindFirst",
-        "FindLast",
-        "FindSet",
-        "FieldCaption",
-        "Get",
-        "GetByRecordId",
-        "GetBySystemId",
-        "GetFilters",
-        "GetPosition",
-        "HasFilter",
-        "Init",
-        "Insert",
-        "IsEmpty",
-        "LockTable",
-        "Mark",
-        "MarkedOnly",
-        "Modify",
-        "ModifyAll",
-        "Next",
-        "ReadIsolation",
-        "RecordId",
-        "Rename",
-        "Reset",
-        "SetAutoCalcFields",
-        "SetCurrentKey",
-        "SetFilter",
-        "SetLoadFields",
-        "SetPosition",
-        "SetRange",
-        "SetRecFilter",
-        "TableCaption",
-        "TableName",
-        "TestField",
-        "TransferFields",
-        "Validate",
-    ]
-}
-
-fn builtin_codeunit_methods() -> &'static [&'static str] {
-    &["Run"]
-}
-
-fn builtin_page_methods() -> &'static [&'static str] {
-    &[
-        "Run",
-        "RunModal",
-        "SetRecord",
-        "GetRecord",
-        "Update",
-        "Close",
-        "SetTableView",
-        "LookupMode",
-    ]
-}
-
-fn builtin_report_methods() -> &'static [&'static str] {
-    &[
-        "Run",
-        "RunModal",
-        "Print",
-        "SaveAs",
-        "Execute",
-        "SetTableView",
-        "SetRecord",
-        "UseRequestPage",
-    ]
-}
-
-fn builtin_xmlport_methods() -> &'static [&'static str] {
-    &["Run", "Import", "Export", "SetSource", "SetDestination"]
-}
-
-fn builtin_query_methods() -> &'static [&'static str] {
-    &["Open", "Read", "Close", "SaveAsXml", "SetFilter"]
-}
-
-fn builtin_enum_methods() -> &'static [&'static str] {
-    &["Names", "Ordinals"]
-}
-
-fn builtin_list_methods() -> &'static [&'static str] {
-    &[
-        "Add", "AddRange", "Contains", "Count", "Get", "GetRange", "IndexOf", "Insert", "Remove",
-        "RemoveAt", "Set",
-    ]
-}
-
-fn builtin_dictionary_methods() -> &'static [&'static str] {
-    &[
-        "Add",
-        "ContainsKey",
-        "ContainsValue",
-        "Count",
-        "Get",
-        "Keys",
-        "Remove",
-        "Set",
-        "Values",
-    ]
-}
-
-fn builtin_methods_for_object_kind(object_kind: &str) -> Option<&'static [&'static str]> {
-    match object_kind.to_ascii_lowercase().as_str() {
-        "table" => Some(builtin_record_methods()),
-        "codeunit" => Some(builtin_codeunit_methods()),
-        "page" | "page_builtin" => Some(builtin_page_methods()),
-        "report" | "report_builtin" => Some(builtin_report_methods()),
-        "xmlport" | "xmlport_builtin" => Some(builtin_xmlport_methods()),
-        "query" | "query_builtin" => Some(builtin_query_methods()),
-        "enum" | "enum_builtin" => Some(builtin_enum_methods()),
-        "list" => Some(builtin_list_methods()),
-        "dictionary" => Some(builtin_dictionary_methods()),
-        "codeunit_builtin" => Some(builtin_codeunit_methods()),
-        _ => None,
+    if visited {
+        return false;
     }
+
+    for entry in state.documents.iter() {
+        let doc = entry.value();
+        for object_symbol in &doc.symbol_table.symbols {
+            let AlSymbolKind::Object(kind) = object_symbol.kind else {
+                continue;
+            };
+            if !kind.label().eq_ignore_ascii_case(object_kind)
+                || !object_symbol.name.eq_ignore_ascii_case(object_name)
+            {
+                continue;
+            }
+            if visit(entry.key(), doc, object_symbol) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn supports_symbol_object_lookup(object_kind: &str) -> bool {
+    matches!(
+        object_kind.to_ascii_lowercase().as_str(),
+        "table" | "codeunit" | "page" | "report" | "query" | "xmlport" | "enum" | "interface"
+    )
 }
 
 /// Extract the word prefix before the cursor position.
@@ -1905,6 +2087,239 @@ mod tests {
     }
 
     #[test]
+    fn test_completion_dot_record_variable_quoted_member_prefix() {
+        let table_source = r#"table 18 Customer
+{
+    fields
+    {
+        field(1; "Document Type"; Option)
+        {
+        }
+        field(2; Name; Text[100])
+        {
+        }
+    }
+}"#;
+        let codeunit_source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Cust: Record Customer;
+    begin
+        Cust."Doc
+    end;
+}"#;
+        let table_uri = Url::parse("file:///test/customer.al").unwrap();
+        let codeunit_uri = Url::parse("file:///test/test.al").unwrap();
+
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(table_uri, DocumentState::new(table_source).unwrap());
+        state.documents.insert(
+            codeunit_uri.clone(),
+            DocumentState::new(codeunit_source).unwrap(),
+        );
+
+        let (line, character) = cursor_after(codeunit_source, "Cust.\"Doc");
+        let doc = state.documents.get(&codeunit_uri).unwrap();
+        let source_text = doc.source();
+        let byte_offset =
+            crate::convert::lsp_position_to_byte_offset(&doc.rope, Position { line, character })
+                .unwrap();
+        assert_eq!(
+            parse_object_before_member_fragment(source_text, byte_offset),
+            Some((source_text.find("Cust.\"Doc").unwrap(), "Cust".to_string()))
+        );
+        assert_eq!(
+            dot_target_at_offset(&state, &doc, source_text, byte_offset),
+            Some(("table".to_string(), "Customer".to_string()))
+        );
+        let params = make_completion_params(codeunit_uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Document Type"),
+            "expected quoted field completion, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_record_procedure_visibility_workspace() {
+        let table_source = r#"table 18 Customer
+{
+    fields
+    {
+        field(1; Name; Text[100]) { }
+    }
+
+    procedure PublicProc()
+    begin
+    end;
+
+    internal procedure InternalProc()
+    begin
+    end;
+
+    local procedure LocalProc()
+    begin
+    end;
+
+    protected procedure ProtectedProc()
+    begin
+    end;
+}"#;
+        let codeunit_source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.
+    end;
+}"#;
+
+        let table_uri = Url::parse("file:///test/customer.al").unwrap();
+        let codeunit_uri = Url::parse("file:///test/test.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(table_uri, DocumentState::new(table_source).unwrap());
+        state.documents.insert(
+            codeunit_uri.clone(),
+            DocumentState::new(codeunit_source).unwrap(),
+        );
+
+        let (line, character) = cursor_after(codeunit_source, "Cust.");
+        let params = make_completion_params(codeunit_uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+
+        assert!(
+            labels.iter().any(|l| l == "PublicProc"),
+            "expected public procedure completion, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "InternalProc"),
+            "expected internal procedure completion in workspace, got: {labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|l| l == "LocalProc"),
+            "did not expect local procedure completion, got: {labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|l| l == "ProtectedProc"),
+            "did not expect protected procedure completion, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_record_procedure_visibility_alpackage_internal_hidden() {
+        let table_source = r#"table 18 Customer
+{
+    procedure PublicProc()
+    begin
+    end;
+
+    internal procedure InternalProc()
+    begin
+    end;
+}"#;
+        let codeunit_source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.
+    end;
+}"#;
+
+        let table_uri = Url::parse("alpackage://demo/customer.al").unwrap();
+        let codeunit_uri = Url::parse("file:///test/test.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(table_uri, DocumentState::new(table_source).unwrap());
+        state.documents.insert(
+            codeunit_uri.clone(),
+            DocumentState::new(codeunit_source).unwrap(),
+        );
+
+        let (line, character) = cursor_after(codeunit_source, "Cust.");
+        let params = make_completion_params(codeunit_uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+
+        assert!(
+            labels.iter().any(|l| l == "PublicProc"),
+            "expected public procedure completion, got: {labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|l| l == "InternalProc"),
+            "did not expect internal procedure completion from alpackage, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_record_parameter_variable() {
+        let table_source = r#"table 18 Customer
+{
+    fields
+    {
+        field(1; Name; Text[100]) { }
+    }
+}"#;
+        let codeunit_source = r#"codeunit 50100 Test
+{
+    procedure DoWork(var RecParam: Record Customer)
+    begin
+        RecParam.
+    end;
+}"#;
+
+        let table_uri = Url::parse("file:///test/customer.al").unwrap();
+        let codeunit_uri = Url::parse("file:///test/test.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(table_uri, DocumentState::new(table_source).unwrap());
+        state.documents.insert(
+            codeunit_uri.clone(),
+            DocumentState::new(codeunit_source).unwrap(),
+        );
+
+        let (line, character) = cursor_after(codeunit_source, "RecParam.");
+        let params = make_completion_params(codeunit_uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Name"),
+            "expected table field completion for record parameter, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "FindFirst"),
+            "expected built-in record methods for record parameter, got: {labels:?}"
+        );
+    }
+
+    #[test]
     fn test_completion_dot_record_includes_builtin_methods() {
         let source = r#"table 18 Customer
 {
@@ -1939,6 +2354,44 @@ codeunit 50100 Test
         assert!(
             labels.iter().any(|l| l == "FindSet"),
             "expected built-in Record method FindSet, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_record_builtin_method_includes_signature_and_no_docs_payload() {
+        let source = r#"table 18 Customer
+{
+}
+
+codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.Fi
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let params = make_completion_params(uri, 10, 15);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let items = items_from(result.unwrap());
+        let find_first = items
+            .into_iter()
+            .find(|i| i.label == "FindFirst")
+            .unwrap_or_else(|| panic!("expected FindFirst completion item"));
+
+        assert_eq!(find_first.detail.as_deref(), Some("FindFirst(): Boolean"));
+        assert!(
+            find_first.documentation.is_none(),
+            "expected no docs payload on built-in completion items, got: {:?}",
+            find_first.documentation
         );
     }
 
@@ -2044,6 +2497,1260 @@ codeunit 50100 Test
         assert!(
             labels.iter().any(|l| l == "Values"),
             "expected Dictionary built-in method Values, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_text_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Txt: Text;
+    begin
+        Txt.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Txt.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Contains"),
+            "expected Text built-in method Contains, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Split"),
+            "expected Text built-in method Split, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_guid_static_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        Guid.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Guid.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "CreateGuid"),
+            "expected Guid built-in method CreateGuid, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_date_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        D: Date;
+    begin
+        D.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "D.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Day"),
+            "expected Date built-in method Day, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "WeekNo"),
+            "expected Date built-in method WeekNo, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_instream_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        StreamIn: InStream;
+    begin
+        StreamIn.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "StreamIn.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "ReadText"),
+            "expected InStream built-in method ReadText, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "EOS"),
+            "expected InStream built-in method EOS, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_recordid_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        RecIdentifier: RecordId;
+    begin
+        RecIdentifier.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "RecIdentifier.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "TableNo"),
+            "expected RecordId built-in method TableNo, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "GetRecord"),
+            "expected RecordId built-in method GetRecord, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_variant_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        AnyValue: Variant;
+    begin
+        AnyValue.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "AnyValue.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "IsRecord"),
+            "expected Variant built-in method IsRecord, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "IsJsonObject"),
+            "expected Variant built-in method IsJsonObject, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_sessionsettings_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        SessionCfg: SessionSettings;
+    begin
+        SessionCfg.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "SessionCfg.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Init"),
+            "expected SessionSettings built-in method Init, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "RequestSessionUpdate"),
+            "expected SessionSettings built-in method RequestSessionUpdate, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_notification_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Notice: Notification;
+    begin
+        Notice.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Notice.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "AddAction"),
+            "expected Notification built-in method AddAction, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Send"),
+            "expected Notification built-in method Send, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_dialog_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        ProgressDlg: Dialog;
+    begin
+        ProgressDlg.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "ProgressDlg.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Open"),
+            "expected Dialog built-in method Open, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Update"),
+            "expected Dialog built-in method Update, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_moduleinfo_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        ModInfo: ModuleInfo;
+    begin
+        ModInfo.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "ModInfo.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Publisher"),
+            "expected ModuleInfo built-in method Publisher, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "AppVersion"),
+            "expected ModuleInfo built-in method AppVersion, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_session_static_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        Session.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Session.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "StartSession"),
+            "expected Session built-in method StartSession, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "CurrentSessionId"),
+            "expected Session built-in method CurrentSessionId, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_secrettext_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        SecretVal: SecretText;
+    begin
+        SecretVal.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "SecretVal.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "IsEmpty"),
+            "expected SecretText built-in method IsEmpty, got: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Unwrap"),
+            "expected SecretText built-in method Unwrap, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_test_runtime_types_include_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        PageVar: TestPage "Dummy List Page";
+        FieldVar: TestField;
+        ActionVar: TestAction;
+        RequestVar: TestRequestPage "Dummy Sales Report";
+        PartVar: TestPart;
+        FilterVar: TestFilter;
+    begin
+        PageVar.
+        FieldVar.
+        ActionVar.
+        RequestVar.
+        PartVar.
+        FilterVar.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (page_line, page_char) = cursor_after(source, "PageVar.");
+        let page_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), page_line, page_char),
+            )
+            .expect("expected TestPage completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            page_labels.iter().any(|l| l == "OpenView"),
+            "expected TestPage built-in method OpenView, got: {page_labels:?}"
+        );
+        assert!(
+            page_labels.iter().any(|l| l == "Close"),
+            "expected TestPage built-in method Close, got: {page_labels:?}"
+        );
+
+        let (field_line, field_char) = cursor_after(source, "FieldVar.");
+        let field_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), field_line, field_char),
+            )
+            .expect("expected TestField completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            field_labels.iter().any(|l| l == "SetValue"),
+            "expected TestField built-in method SetValue, got: {field_labels:?}"
+        );
+        assert!(
+            field_labels.iter().any(|l| l == "Editable"),
+            "expected TestField built-in method Editable, got: {field_labels:?}"
+        );
+
+        let (action_line, action_char) = cursor_after(source, "ActionVar.");
+        let action_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), action_line, action_char),
+            )
+            .expect("expected TestAction completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            action_labels.iter().any(|l| l == "Invoke"),
+            "expected TestAction built-in method Invoke, got: {action_labels:?}"
+        );
+        assert!(
+            action_labels.iter().any(|l| l == "Enabled"),
+            "expected TestAction built-in method Enabled, got: {action_labels:?}"
+        );
+
+        let (request_line, request_char) = cursor_after(source, "RequestVar.");
+        let request_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), request_line, request_char),
+            )
+            .expect("expected TestRequestPage completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            request_labels.iter().any(|l| l == "SaveAsPdf"),
+            "expected TestRequestPage built-in method SaveAsPdf, got: {request_labels:?}"
+        );
+        assert!(
+            request_labels.iter().any(|l| l == "Schedule"),
+            "expected TestRequestPage built-in method Schedule, got: {request_labels:?}"
+        );
+
+        let (part_line, part_char) = cursor_after(source, "PartVar.");
+        let part_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), part_line, part_char),
+            )
+            .expect("expected TestPart completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            part_labels.iter().any(|l| l == "GetField"),
+            "expected TestPart built-in method GetField, got: {part_labels:?}"
+        );
+        assert!(
+            part_labels.iter().any(|l| l == "Visible"),
+            "expected TestPart built-in method Visible, got: {part_labels:?}"
+        );
+
+        let (filter_line, filter_char) = cursor_after(source, "FilterVar.");
+        let filter_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri, filter_line, filter_char),
+            )
+            .expect("expected TestFilter completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            filter_labels.iter().any(|l| l == "SetFilter"),
+            "expected TestFilter built-in method SetFilter, got: {filter_labels:?}"
+        );
+        assert!(
+            filter_labels.iter().any(|l| l == "CurrentKey"),
+            "expected TestFilter built-in method CurrentKey, got: {filter_labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_enum_builtin_includes_asinteger() {
+        let source = r#"enum 50100 "Dummy Enum"
+{
+    value(0; First) { }
+    value(1; Second) { }
+}
+
+codeunit 50101 Test
+{
+    procedure DoWork()
+    var
+        E: Enum "Dummy Enum";
+    begin
+        E.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "E.");
+        let labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, line, character))
+                .expect("expected enum completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            labels.iter().any(|l| l == "AsInteger"),
+            "expected Enum built-in AsInteger method, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_additional_builtin_runtime_types_include_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        ReqPage: RequestPage;
+        Upload: FileUpload;
+        ReqMsg: TestHttpRequestMessage;
+        WsCtx: WebServiceActionContext;
+        XmlWrite: XmlWriteOptions;
+    begin
+        ReqPage.
+        Upload.
+        ReqMsg.
+        WsCtx.
+        XmlWrite.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (req_line, req_char) = cursor_after(source, "ReqPage.");
+        let req_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), req_line, req_char),
+            )
+            .expect("expected RequestPage completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            req_labels.iter().any(|l| l == "SetSelectionFilter"),
+            "expected RequestPage built-in SetSelectionFilter, got: {req_labels:?}"
+        );
+        assert!(
+            req_labels.iter().any(|l| l == "ValidationErrorCount"),
+            "expected RequestPage built-in ValidationErrorCount, got: {req_labels:?}"
+        );
+
+        let (upload_line, upload_char) = cursor_after(source, "Upload.");
+        let upload_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), upload_line, upload_char),
+            )
+            .expect("expected FileUpload completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            upload_labels.iter().any(|l| l == "CreateInStream"),
+            "expected FileUpload built-in CreateInStream, got: {upload_labels:?}"
+        );
+        assert!(
+            upload_labels.iter().any(|l| l == "FileName"),
+            "expected FileUpload built-in FileName, got: {upload_labels:?}"
+        );
+
+        let (reqmsg_line, reqmsg_char) = cursor_after(source, "ReqMsg.");
+        let reqmsg_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), reqmsg_line, reqmsg_char),
+            )
+            .expect("expected TestHttpRequestMessage completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            reqmsg_labels.iter().any(|l| l == "Headers"),
+            "expected TestHttpRequestMessage built-in Headers, got: {reqmsg_labels:?}"
+        );
+        assert!(
+            reqmsg_labels.iter().any(|l| l == "Path"),
+            "expected TestHttpRequestMessage built-in Path, got: {reqmsg_labels:?}"
+        );
+
+        let (wsc_line, wsc_char) = cursor_after(source, "WsCtx.");
+        let wsc_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), wsc_line, wsc_char),
+            )
+            .expect("expected WebServiceActionContext completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            wsc_labels.iter().any(|l| l == "AddEntityKey"),
+            "expected WebServiceActionContext built-in AddEntityKey, got: {wsc_labels:?}"
+        );
+        assert!(
+            wsc_labels.iter().any(|l| l == "SetResultCode"),
+            "expected WebServiceActionContext built-in SetResultCode, got: {wsc_labels:?}"
+        );
+
+        let (xml_line, xml_char) = cursor_after(source, "XmlWrite.");
+        let xml_labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, xml_line, xml_char))
+                .expect("expected XmlWriteOptions completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            xml_labels.iter().any(|l| l == "PreserveWhitespace"),
+            "expected XmlWriteOptions built-in PreserveWhitespace, got: {xml_labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_database_and_system_static_includes_builtin_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        Database.
+        System.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (db_line, db_char) = cursor_after(source, "Database.");
+        let db_result = handle_completion(
+            &state,
+            make_completion_params(uri.clone(), db_line, db_char),
+        );
+        assert!(db_result.is_some(), "expected database completion result");
+        let db_labels: Vec<String> = items_from(db_result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            db_labels.iter().any(|l| l == "Commit"),
+            "expected Database built-in method Commit, got: {db_labels:?}"
+        );
+
+        let (sys_line, sys_char) = cursor_after(source, "System.");
+        let sys_result = handle_completion(&state, make_completion_params(uri, sys_line, sys_char));
+        assert!(sys_result.is_some(), "expected system completion result");
+        let sys_labels: Vec<String> = items_from(sys_result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            sys_labels.iter().any(|l| l == "CalcDate"),
+            "expected System built-in method CalcDate, got: {sys_labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_sessioninformation_and_taskscheduler_static() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        SessionInformation.
+        TaskScheduler.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (si_line, si_char) = cursor_after(source, "SessionInformation.");
+        let si_result = handle_completion(
+            &state,
+            make_completion_params(uri.clone(), si_line, si_char),
+        );
+        assert!(
+            si_result.is_some(),
+            "expected SessionInformation completion result"
+        );
+        let si_labels: Vec<String> = items_from(si_result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            si_labels.iter().any(|l| l == "SessionId"),
+            "expected SessionInformation built-in SessionId, got: {si_labels:?}"
+        );
+
+        let (ts_line, ts_char) = cursor_after(source, "TaskScheduler.");
+        let ts_result = handle_completion(&state, make_completion_params(uri, ts_line, ts_char));
+        assert!(
+            ts_result.is_some(),
+            "expected TaskScheduler completion result"
+        );
+        let ts_labels: Vec<String> = items_from(ts_result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            ts_labels.iter().any(|l| l == "CreateTask"),
+            "expected TaskScheduler built-in CreateTask, got: {ts_labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_filterpagebuilder_blob_file_textbuilder_and_version() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        FPB: FilterPageBuilder;
+        B: Blob;
+        Builder: TextBuilder;
+    begin
+        FPB.
+        B.
+        Builder.
+        File.
+        Version.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (fpb_line, fpb_char) = cursor_after(source, "FPB.");
+        let fpb_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), fpb_line, fpb_char),
+            )
+            .expect("expected FilterPageBuilder completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(fpb_labels.iter().any(|l| l == "RunModal"));
+
+        let (blob_line, blob_char) = cursor_after(source, "\n        B.");
+        let blob_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), blob_line, blob_char),
+            )
+            .expect("expected Blob completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(
+            blob_labels.iter().any(|l| l == "CreateInStream"),
+            "expected Blob built-in method CreateInStream, got: {blob_labels:?}"
+        );
+
+        let (tb_line, tb_char) = cursor_after(source, "Builder.");
+        let tb_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), tb_line, tb_char),
+            )
+            .expect("expected TextBuilder completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(tb_labels.iter().any(|l| l == "Append"));
+
+        let (file_line, file_char) = cursor_after(source, "File.");
+        let file_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), file_line, file_char),
+            )
+            .expect("expected File completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(file_labels.iter().any(|l| l == "Exists"));
+
+        let (ver_line, ver_char) = cursor_after(source, "Version.");
+        let ver_labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, ver_line, ver_char))
+                .expect("expected Version completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(ver_labels.iter().any(|l| l == "Create"));
+    }
+
+    #[test]
+    fn test_completion_dot_navapp_numbersequence_and_moduledependencyinfo() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        DepInfo: ModuleDependencyInfo;
+    begin
+        NavApp.
+        NumberSequence.
+        DepInfo.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (na_line, na_char) = cursor_after(source, "NavApp.");
+        let na_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), na_line, na_char),
+            )
+            .expect("expected NavApp completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(na_labels.iter().any(|l| l == "GetCurrentModuleInfo"));
+
+        let (ns_line, ns_char) = cursor_after(source, "NumberSequence.");
+        let ns_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), ns_line, ns_char),
+            )
+            .expect("expected NumberSequence completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(ns_labels.iter().any(|l| l == "Next"));
+
+        let (dep_line, dep_char) = cursor_after(source, "DepInfo.");
+        let dep_labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, dep_line, dep_char))
+                .expect("expected ModuleDependencyInfo completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(dep_labels.iter().any(|l| l == "Publisher"));
+    }
+
+    #[test]
+    fn test_completion_dot_media_mediaset_and_errorinfo() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        M: Media;
+        MS: MediaSet;
+        Err: ErrorInfo;
+    begin
+        M.
+        MS.
+        Err.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (m_line, m_char) = cursor_after(source, "\n        M.");
+        let m_labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri.clone(), m_line, m_char))
+                .expect("expected Media completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(m_labels.iter().any(|l| l == "ImportStream"));
+
+        let (ms_line, ms_char) = cursor_after(source, "\n        MS.");
+        let ms_labels: Vec<String> = items_from(
+            handle_completion(
+                &state,
+                make_completion_params(uri.clone(), ms_line, ms_char),
+            )
+            .expect("expected MediaSet completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(ms_labels.iter().any(|l| l == "Item"));
+
+        let (e_line, e_char) = cursor_after(source, "\n        Err.");
+        let e_labels: Vec<String> = items_from(
+            handle_completion(&state, make_completion_params(uri, e_line, e_char))
+                .expect("expected ErrorInfo completion"),
+        )
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+        assert!(e_labels.iter().any(|l| l == "DetailedMessage"));
+    }
+
+    #[test]
+    fn test_completion_dot_builtin_return_chain_mediaset_item_to_media() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        MS: MediaSet;
+    begin
+        MS.Item(1).
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "MS.Item(1).");
+        let result = handle_completion(&state, make_completion_params(uri, line, character));
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "HasValue"),
+            "expected chained Media method HasValue, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_builtin_return_chain_version_create() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        Version.Create('1.0.0.0').
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Version.Create('1.0.0.0').");
+        let result = handle_completion(&state, make_completion_params(uri, line, character));
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Major"),
+            "expected chained Version method Major, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_builtin_return_chain_recordid_to_recordref() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        RecIdentifier: RecordId;
+    begin
+        RecIdentifier.GetRecord().
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "RecIdentifier.GetRecord().");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "FindFirst"),
+            "expected chained RecordRef method FindFirst, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_builtin_return_chain_recordid_to_recordref_without_parentheses() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        RecIdentifier: RecordId;
+    begin
+        RecIdentifier.GetRecord.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "RecIdentifier.GetRecord.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "FindFirst"),
+            "expected chained RecordRef method FindFirst for no-() call, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_builtin_return_chain_datetime_to_date() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Stamp: DateTime;
+    begin
+        Stamp.Date().
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Stamp.Date().");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "WeekNo"),
+            "expected chained Date method WeekNo, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_builtin_return_chain_datetime_to_date_without_parentheses() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Stamp: DateTime;
+    begin
+        Stamp.Date.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Stamp.Date.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "WeekNo"),
+            "expected chained Date method WeekNo for no-() call, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_builtin_return_chain_dictionary_keys() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Tags: Dictionary of [Text, Text];
+    begin
+        Tags.Keys().
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Tags.Keys().");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Count"),
+            "expected chained List method Count, got: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_completion_dot_builtin_return_chain_without_parentheses() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Tags: Dictionary of [Text, Text];
+    begin
+        Tags.Keys.
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_after(source, "Tags.Keys.");
+        let params = make_completion_params(uri, line, character);
+        let result = handle_completion(&state, params);
+        assert!(result.is_some(), "expected completion result");
+        let labels: Vec<String> = items_from(result.unwrap())
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Count"),
+            "expected chained List method Count for no-() call, got: {labels:?}"
         );
     }
 

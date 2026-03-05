@@ -117,8 +117,7 @@ fn find_object_member_declarations(
 
             if !is_method_call && kind.label().eq_ignore_ascii_case("table") && !found_symbol_member
             {
-                if let Some(location) =
-                    find_table_field_location(&uri, source.as_str(), symbol, member_name)
+                if let Some(location) = find_table_field_location(&uri, source, symbol, member_name)
                 {
                     locations.push(location);
                 }

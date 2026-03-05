@@ -7,7 +7,7 @@ use al_syntax::document::{DocumentState, IncrementalEdit};
 
 use crate::state::WorldState;
 
-use super::diagnostics::publish_diagnostics;
+use super::diagnostics::{publish_diagnostics, publish_syntax_diagnostics};
 
 pub async fn handle_did_open(
     client: &Client,
@@ -33,6 +33,7 @@ pub async fn handle_did_change(
     let uri = params.text_document.uri;
 
     let mut changed = false;
+    let mut has_full_sync_change = false;
     if let Some(mut doc) = state.documents.get_mut(&uri) {
         for change in params.content_changes {
             changed = true;
@@ -57,7 +58,7 @@ pub async fn handle_did_change(
                         });
                     } else {
                         // Fallback: apply best-effort range replacement and do a full reparse.
-                        let mut source = doc.source();
+                        let mut source = doc.source().to_string();
                         let start = start_offset
                             .unwrap_or_else(|| offset_from_position_clamped(&doc.rope, range.start))
                             .min(source.len());
@@ -73,6 +74,7 @@ pub async fn handle_did_change(
                 }
             } else {
                 // Full document sync
+                has_full_sync_change = true;
                 doc.reparse_full(&change.text);
             }
         }
@@ -81,7 +83,11 @@ pub async fn handle_did_change(
     if changed {
         state.reindex_document(&uri);
         if let Some(doc_ref) = state.documents.get(&uri) {
-            publish_diagnostics(client, state, &uri, &doc_ref).await;
+            if has_full_sync_change {
+                publish_diagnostics(client, state, &uri, &doc_ref).await;
+            } else {
+                publish_syntax_diagnostics(client, &uri, &doc_ref).await;
+            }
         }
     }
 }

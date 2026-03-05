@@ -244,6 +244,22 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
     }
 
     #[test]
+    fn test_parse_testpage_and_testrequestpage_type_variables() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        ListPage: TestPage "Dummy List Page";
+        ReqPage: TestRequestPage "Dummy Sales Report";
+    begin
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
     fn test_parse_dictionary_and_list_primitives() {
         let source = r#"codeunit 50100 Test
 {
@@ -252,6 +268,21 @@ codeunit 50200 CompanyAddressProvider implements IAddressProvider
         dict: Dictionary of [Text, Text];
         userGeneratedTags: List of [Text];
     begin
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(!root.has_error(), "tree has errors: {}", root.to_sexp());
+    }
+
+    #[test]
+    fn test_parse_procedure_with_empty_var_section() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Foo()
+    var
+    begin
+        Message('ok');
     end;
 }"#;
         let tree = parse(source).expect("parse failed");

@@ -300,6 +300,14 @@
           "named": true
         },
         {
+          "type": "testpage_type",
+          "named": true
+        },
+        {
+          "type": "testrequestpage_type",
+          "named": true
+        },
+        {
           "type": "xmlport_type",
           "named": true
         }
@@ -1294,6 +1302,14 @@
             "named": true
           },
           {
+            "type": "testpage_type",
+            "named": true
+          },
+          {
+            "type": "testrequestpage_type",
+            "named": true
+          },
+          {
             "type": "xmlport_type",
             "named": true
           }
@@ -1349,6 +1365,14 @@
           },
           {
             "type": "sized_type",
+            "named": true
+          },
+          {
+            "type": "testpage_type",
+            "named": true
+          },
+          {
+            "type": "testrequestpage_type",
             "named": true
           },
           {
@@ -1640,6 +1664,14 @@
           },
           {
             "type": "sized_type",
+            "named": true
+          },
+          {
+            "type": "testpage_type",
+            "named": true
+          },
+          {
+            "type": "testrequestpage_type",
             "named": true
           },
           {
@@ -2229,6 +2261,14 @@
             "named": true
           },
           {
+            "type": "testpage_type",
+            "named": true
+          },
+          {
+            "type": "testrequestpage_type",
+            "named": true
+          },
+          {
             "type": "xmlport_type",
             "named": true
           }
@@ -2490,6 +2530,14 @@
           },
           {
             "type": "sized_type",
+            "named": true
+          },
+          {
+            "type": "testpage_type",
+            "named": true
+          },
+          {
+            "type": "testrequestpage_type",
             "named": true
           },
           {
@@ -3185,6 +3233,14 @@
           },
           {
             "type": "sized_type",
+            "named": true
+          },
+          {
+            "type": "testpage_type",
+            "named": true
+          },
+          {
+            "type": "testrequestpage_type",
             "named": true
           },
           {
@@ -4286,6 +4342,14 @@
             "named": true
           },
           {
+            "type": "testpage_type",
+            "named": true
+          },
+          {
+            "type": "testrequestpage_type",
+            "named": true
+          },
+          {
             "type": "xmlport_type",
             "named": true
           }
@@ -4634,6 +4698,46 @@
     }
   },
   {
+    "type": "testpage_type",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "testrequestpage_type",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "quoted_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "trigger_declaration",
     "named": true,
     "fields": {
@@ -4755,7 +4859,7 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": true,
+      "required": false,
       "types": [
         {
           "type": "variable_declaration",
@@ -4844,6 +4948,14 @@
           },
           {
             "type": "sized_type",
+            "named": true
+          },
+          {
+            "type": "testpage_type",
+            "named": true
+          },
+          {
+            "type": "testrequestpage_type",
             "named": true
           },
           {

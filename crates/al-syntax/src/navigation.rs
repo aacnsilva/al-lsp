@@ -430,6 +430,10 @@ pub fn extract_type_object_name(type_info: &str) -> Option<(&'static str, &str)>
         return Some(("dictionary", "Dictionary"));
     }
 
+    if let Some((object_kind, name)) = builtin_data_type_object_kind(type_info) {
+        return Some((object_kind, name));
+    }
+
     let split_idx = type_info.find(char::is_whitespace)?;
     let kind = &type_info[..split_idx];
     let mut name = type_info[split_idx..].trim();
@@ -462,6 +466,120 @@ pub fn extract_type_object_name(type_info: &str) -> Option<(&'static str, &str)>
     }
 
     Some((object_kind, name))
+}
+
+fn builtin_data_type_object_kind(type_info: &str) -> Option<(&'static str, &str)> {
+    let head = type_info
+        .split_whitespace()
+        .next()
+        .unwrap_or(type_info)
+        .trim();
+    if head.is_empty() {
+        return None;
+    }
+
+    let base_end = head.find('[').unwrap_or(head.len());
+    let base = head[..base_end].trim_matches('"').trim();
+    if base.is_empty() {
+        return None;
+    }
+
+    let object_kind = match base.to_ascii_lowercase().as_str() {
+        "any" => "any",
+        "biginteger" => "biginteger",
+        "boolean" => "boolean",
+        "byte" => "byte",
+        "char" => "char",
+        "companyproperty" => "companyproperty",
+        "cookie" => "cookie",
+        "datatransfer" => "datatransfer",
+        "dateformula" => "dateformula",
+        "debugger" => "debugger",
+        "decimal" => "decimal",
+        "dotnet" => "dotnet",
+        "fileupload" => "fileupload",
+        "integer" => "integer",
+        "isolatedstorage" => "isolatedstorage",
+        "label" => "label",
+        "option" => "option",
+        "productname" => "productname",
+        "requestpage" => "requestpage",
+        "testfilterfield" => "testfilterfield",
+        "testhttprequestmessage" => "testhttprequestmessage",
+        "testhttpresponsemessage" => "testhttpresponsemessage",
+        "text" => "text",
+        "textconst" => "textconst",
+        "code" => "code",
+        "bigtext" => "bigtext",
+        "secrettext" => "secrettext",
+        "webserviceactioncontext" => "webserviceactioncontext",
+        "guid" => "guid",
+        "jsonobject" => "jsonobject",
+        "jsonarray" => "jsonarray",
+        "jsontoken" => "jsontoken",
+        "jsonvalue" => "jsonvalue",
+        "httpclient" => "httpclient",
+        "httprequestmessage" => "httprequestmessage",
+        "httpresponsemessage" => "httpresponsemessage",
+        "httpcontent" => "httpcontent",
+        "httpheaders" => "httpheaders",
+        "date" => "date",
+        "time" => "time",
+        "datetime" => "datetime",
+        "duration" => "duration",
+        "instream" => "instream",
+        "outstream" => "outstream",
+        "recordid" => "recordid",
+        "variant" => "variant",
+        "sessionsettings" => "sessionsettings",
+        "notification" => "notification",
+        "dialog" => "dialog",
+        "session" => "session",
+        "moduleinfo" => "moduleinfo",
+        "database" => "database",
+        "system" => "system",
+        "sessioninformation" => "sessioninformation",
+        "taskscheduler" => "taskscheduler",
+        "filterpagebuilder" => "filterpagebuilder",
+        "blob" => "blob",
+        "file" => "file",
+        "version" => "version",
+        "moduledependencyinfo" => "moduledependencyinfo",
+        "navapp" => "navapp",
+        "numbersequence" => "numbersequence",
+        "textbuilder" => "textbuilder",
+        "media" => "media",
+        "mediaset" => "mediaset",
+        "errorinfo" => "errorinfo",
+        "testpage" => "testpage",
+        "testfield" => "testfield",
+        "testaction" => "testaction",
+        "testrequestpage" => "testrequestpage",
+        "testpart" => "testpart",
+        "testfilter" => "testfilter",
+        "xmldocument" => "xmldocument",
+        "xmlelement" => "xmlelement",
+        "xmlnode" => "xmlnode",
+        "xmlnodelist" => "xmlnodelist",
+        "xmlattribute" => "xmlattribute",
+        "xmlattributecollection" => "xmlattributecollection",
+        "xmlcdata" => "xmlcdata",
+        "xmlcomment" => "xmlcomment",
+        "xmldeclaration" => "xmldeclaration",
+        "xmldocumenttype" => "xmldocumenttype",
+        "xmlnamespacemanager" => "xmlnamespacemanager",
+        "xmlnametable" => "xmlnametable",
+        "xmlprocessinginstruction" => "xmlprocessinginstruction",
+        "xmlreadoptions" => "xmlreadoptions",
+        "xmltext" => "xmltext",
+        "xmlwriteoptions" => "xmlwriteoptions",
+        "recordref" => "recordref",
+        "fieldref" => "fieldref",
+        "keyref" => "keyref",
+        _ => return None,
+    };
+
+    Some((object_kind, base))
 }
 
 /// Collect folding ranges from structural nodes in the parse tree.
@@ -1162,8 +1280,168 @@ mod tests {
             extract_type_object_name("List of [Text]"),
             Some(("list", "List"))
         );
-        assert_eq!(extract_type_object_name("Integer"), None);
-        assert_eq!(extract_type_object_name("Text[100]"), None);
+        assert_eq!(
+            extract_type_object_name("Text[100]"),
+            Some(("text", "Text"))
+        );
+        assert_eq!(extract_type_object_name("Code[20]"), Some(("code", "Code")));
+        assert_eq!(
+            extract_type_object_name("JsonObject"),
+            Some(("jsonobject", "JsonObject"))
+        );
+        assert_eq!(
+            extract_type_object_name("HttpClient"),
+            Some(("httpclient", "HttpClient"))
+        );
+        assert_eq!(
+            extract_type_object_name("DateTime"),
+            Some(("datetime", "DateTime"))
+        );
+        assert_eq!(extract_type_object_name("Date"), Some(("date", "Date")));
+        assert_eq!(extract_type_object_name("Time"), Some(("time", "Time")));
+        assert_eq!(
+            extract_type_object_name("Duration"),
+            Some(("duration", "Duration"))
+        );
+        assert_eq!(
+            extract_type_object_name("InStream"),
+            Some(("instream", "InStream"))
+        );
+        assert_eq!(
+            extract_type_object_name("OutStream"),
+            Some(("outstream", "OutStream"))
+        );
+        assert_eq!(
+            extract_type_object_name("RecordId"),
+            Some(("recordid", "RecordId"))
+        );
+        assert_eq!(
+            extract_type_object_name("Variant"),
+            Some(("variant", "Variant"))
+        );
+        assert_eq!(
+            extract_type_object_name("SessionSettings"),
+            Some(("sessionsettings", "SessionSettings"))
+        );
+        assert_eq!(
+            extract_type_object_name("Notification"),
+            Some(("notification", "Notification"))
+        );
+        assert_eq!(
+            extract_type_object_name("Dialog"),
+            Some(("dialog", "Dialog"))
+        );
+        assert_eq!(
+            extract_type_object_name("Session"),
+            Some(("session", "Session"))
+        );
+        assert_eq!(
+            extract_type_object_name("ModuleInfo"),
+            Some(("moduleinfo", "ModuleInfo"))
+        );
+        assert_eq!(
+            extract_type_object_name("SecretText"),
+            Some(("secrettext", "SecretText"))
+        );
+        assert_eq!(
+            extract_type_object_name("Database"),
+            Some(("database", "Database"))
+        );
+        assert_eq!(
+            extract_type_object_name("System"),
+            Some(("system", "System"))
+        );
+        assert_eq!(
+            extract_type_object_name("SessionInformation"),
+            Some(("sessioninformation", "SessionInformation"))
+        );
+        assert_eq!(
+            extract_type_object_name("TaskScheduler"),
+            Some(("taskscheduler", "TaskScheduler"))
+        );
+        assert_eq!(
+            extract_type_object_name("FilterPageBuilder"),
+            Some(("filterpagebuilder", "FilterPageBuilder"))
+        );
+        assert_eq!(extract_type_object_name("Blob"), Some(("blob", "Blob")));
+        assert_eq!(extract_type_object_name("File"), Some(("file", "File")));
+        assert_eq!(
+            extract_type_object_name("Version"),
+            Some(("version", "Version"))
+        );
+        assert_eq!(
+            extract_type_object_name("ModuleDependencyInfo"),
+            Some(("moduledependencyinfo", "ModuleDependencyInfo"))
+        );
+        assert_eq!(
+            extract_type_object_name("NavApp"),
+            Some(("navapp", "NavApp"))
+        );
+        assert_eq!(
+            extract_type_object_name("NumberSequence"),
+            Some(("numbersequence", "NumberSequence"))
+        );
+        assert_eq!(
+            extract_type_object_name("TextBuilder"),
+            Some(("textbuilder", "TextBuilder"))
+        );
+        assert_eq!(extract_type_object_name("Media"), Some(("media", "Media")));
+        assert_eq!(
+            extract_type_object_name("MediaSet"),
+            Some(("mediaset", "MediaSet"))
+        );
+        assert_eq!(
+            extract_type_object_name("ErrorInfo"),
+            Some(("errorinfo", "ErrorInfo"))
+        );
+        assert_eq!(
+            extract_type_object_name("TestPage"),
+            Some(("testpage", "TestPage"))
+        );
+        assert_eq!(
+            extract_type_object_name("TestPage \"Dummy Card\""),
+            Some(("testpage", "TestPage"))
+        );
+        assert_eq!(
+            extract_type_object_name("TestField"),
+            Some(("testfield", "TestField"))
+        );
+        assert_eq!(
+            extract_type_object_name("TestAction"),
+            Some(("testaction", "TestAction"))
+        );
+        assert_eq!(
+            extract_type_object_name("TestRequestPage"),
+            Some(("testrequestpage", "TestRequestPage"))
+        );
+        assert_eq!(
+            extract_type_object_name("TestRequestPage \"Dummy Sales Report\""),
+            Some(("testrequestpage", "TestRequestPage"))
+        );
+        assert_eq!(
+            extract_type_object_name("TestPart"),
+            Some(("testpart", "TestPart"))
+        );
+        assert_eq!(
+            extract_type_object_name("TestFilter"),
+            Some(("testfilter", "TestFilter"))
+        );
+        assert_eq!(
+            extract_type_object_name("Integer"),
+            Some(("integer", "Integer"))
+        );
+        assert_eq!(
+            extract_type_object_name("Boolean"),
+            Some(("boolean", "Boolean"))
+        );
+        assert_eq!(
+            extract_type_object_name("RequestPage"),
+            Some(("requestpage", "RequestPage"))
+        );
+        assert_eq!(
+            extract_type_object_name("XmlWriteOptions"),
+            Some(("xmlwriteoptions", "XmlWriteOptions"))
+        );
     }
 
     #[test]

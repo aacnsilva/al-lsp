@@ -25,6 +25,12 @@ pub async fn publish_diagnostics(
         .await;
 }
 
+pub async fn publish_syntax_diagnostics(client: &Client, uri: &Url, doc: &DocumentState) {
+    client
+        .publish_diagnostics(uri.clone(), doc.diagnostics.clone(), None)
+        .await;
+}
+
 fn collect_semantic_member_diagnostics(
     state: &WorldState,
     caller_uri: &Url,
@@ -293,7 +299,7 @@ fn build_object_decl_entry(
 
     for child in &object.children {
         let access = if matches!(child.kind, AlSymbolKind::Procedure) {
-            let source = source_cache.get_or_insert_with(|| target_doc.source());
+            let source = source_cache.get_or_insert_with(|| target_doc.source().to_string());
             procedure_access_modifier(target_doc, source, child)
         } else {
             ProcedureAccess::Public
@@ -500,154 +506,8 @@ fn ts_range_to_lsp_range(start: tree_sitter::Point, end: tree_sitter::Point) -> 
     }
 }
 
-fn is_known_record_method(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "addlink"
-            | "ascending"
-            | "calcfields"
-            | "calcsums"
-            | "changecompany"
-            | "copy"
-            | "copyfilters"
-            | "count"
-            | "delete"
-            | "deleteall"
-            | "deletelinks"
-            | "find"
-            | "findfirst"
-            | "findlast"
-            | "findset"
-            | "fieldcaption"
-            | "get"
-            | "getbyrecordid"
-            | "getbysystemid"
-            | "getfilters"
-            | "getposition"
-            | "hasfilter"
-            | "init"
-            | "insert"
-            | "isempty"
-            | "locktable"
-            | "mark"
-            | "markedonly"
-            | "modify"
-            | "modifyall"
-            | "next"
-            | "readisolation"
-            | "recordid"
-            | "rename"
-            | "reset"
-            | "setautocalcfields"
-            | "setcurrentkey"
-            | "setfilter"
-            | "setloadfields"
-            | "setposition"
-            | "setrange"
-            | "setrecfilter"
-            | "tablecaption"
-            | "tablename"
-            | "testfield"
-            | "transferfields"
-            | "validate"
-    )
-}
-
-fn is_known_codeunit_method(name: &str) -> bool {
-    matches!(name.to_ascii_lowercase().as_str(), "run")
-}
-
-fn is_known_page_method(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "run"
-            | "runmodal"
-            | "setrecord"
-            | "getrecord"
-            | "update"
-            | "close"
-            | "settableview"
-            | "lookupmode"
-    )
-}
-
-fn is_known_report_method(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "run"
-            | "runmodal"
-            | "print"
-            | "saveas"
-            | "execute"
-            | "settableview"
-            | "setrecord"
-            | "userequestpage"
-    )
-}
-
-fn is_known_xmlport_method(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "run" | "import" | "export" | "setsource" | "setdestination"
-    )
-}
-
-fn is_known_query_method(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "open" | "read" | "close" | "saveasxml" | "setfilter"
-    )
-}
-
-fn is_known_enum_method(name: &str) -> bool {
-    matches!(name.to_ascii_lowercase().as_str(), "names" | "ordinals")
-}
-
-fn is_known_list_method(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "add"
-            | "addrange"
-            | "contains"
-            | "count"
-            | "get"
-            | "getrange"
-            | "indexof"
-            | "insert"
-            | "remove"
-            | "removeat"
-            | "set"
-    )
-}
-
-fn is_known_dictionary_method(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "add"
-            | "containskey"
-            | "containsvalue"
-            | "count"
-            | "get"
-            | "keys"
-            | "remove"
-            | "set"
-            | "values"
-    )
-}
-
 fn is_known_builtin_method(object_kind: &str, method_name: &str) -> bool {
-    match object_kind.to_ascii_lowercase().as_str() {
-        "table" => is_known_record_method(method_name),
-        "codeunit" => is_known_codeunit_method(method_name),
-        "page" => is_known_page_method(method_name),
-        "report" => is_known_report_method(method_name),
-        "xmlport" => is_known_xmlport_method(method_name),
-        "query" => is_known_query_method(method_name),
-        "enum" => is_known_enum_method(method_name),
-        "list" => is_known_list_method(method_name),
-        "dictionary" => is_known_dictionary_method(method_name),
-        _ => false,
-    }
+    crate::builtins::is_known_builtin_method(object_kind, method_name)
 }
 
 fn is_known_system_table_field(name: &str) -> bool {
@@ -1202,6 +1062,34 @@ codeunit 50100 Test
     }
 
     #[test]
+    fn test_no_diagnostics_for_procedure_with_empty_var_section() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Foo()
+    var
+    begin
+        Message('ok');
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        assert!(
+            doc.diagnostics.is_empty(),
+            "did not expect syntax diagnostics for procedure with empty var section, got: {:?}",
+            doc.diagnostics
+        );
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            diags.is_empty(),
+            "did not expect semantic diagnostics for procedure with empty var section, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn test_no_semantic_diagnostic_for_record_enum_field_qualified_value() {
         let source = r#"enum 50100 "Dummy Trigger Mode"
 {
@@ -1372,6 +1260,403 @@ codeunit 50100 Test
                 .iter()
                 .any(|d| d.message.contains("Add") || d.message.contains("ContainsKey")),
             "did not expect diagnostics for built-in Dictionary methods, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_text_method() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Run()
+    var
+        Txt: Text;
+    begin
+        if Txt.Contains('A') then;
+        Txt.Split(',');
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.message.contains("Contains") || d.message.contains("Split")),
+            "did not expect diagnostics for built-in Text methods, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_temporal_and_stream_methods() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Run()
+    var
+        D: Date;
+        Stamp: DateTime;
+        StreamIn: InStream;
+        ValueText: Text;
+    begin
+        if D.DayOfWeek = 1 then;
+        if Stamp.Date.WeekNo > 0 then;
+        StreamIn.ReadText(ValueText);
+        if StreamIn.EOS then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("DayOfWeek")
+                    || d.message.contains("WeekNo")
+                    || d.message.contains("ReadText")
+                    || d.message.contains("EOS")
+            }),
+            "did not expect diagnostics for built-in temporal/stream methods, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_recordid_variant_and_sessionsettings() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Run()
+    var
+        RecIdentifier: RecordId;
+        AnyValue: Variant;
+        SessionCfg: SessionSettings;
+    begin
+        if AnyValue.IsRecord then;
+        if RecIdentifier.GetRecord.FindFirst then;
+        SessionCfg.Init();
+        SessionCfg.RequestSessionUpdate(true);
+        if SessionCfg.GetLanguageId > 0 then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("IsRecord")
+                    || d.message.contains("GetRecord")
+                    || d.message.contains("FindFirst")
+                    || d.message.contains("Init")
+                    || d.message.contains("RequestSessionUpdate")
+                    || d.message.contains("GetLanguageId")
+            }),
+            "did not expect diagnostics for built-in RecordId/Variant/SessionSettings methods, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_notification_dialog_session_moduleinfo_secrettext() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Run()
+    var
+        Notice: Notification;
+        ProgressDlg: Dialog;
+        ModInfo: ModuleInfo;
+        SecretVal: SecretText;
+        SessionId: Integer;
+    begin
+        Notice.Message('Ready');
+        Notice.AddAction('Open', 50100, 'RunAction');
+        Notice.Send();
+        ProgressDlg.Open('Processing #1####');
+        ProgressDlg.Update(1, 10);
+        ProgressDlg.Close();
+        if ModInfo.Publisher <> '' then;
+        if SecretVal.IsEmpty then;
+        if Session.CurrentSessionId > 0 then;
+        if Session.StartSession(SessionId, 50100) then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("Message")
+                    || d.message.contains("AddAction")
+                    || d.message.contains("Send")
+                    || d.message.contains("Open")
+                    || d.message.contains("Update")
+                    || d.message.contains("Close")
+                    || d.message.contains("Publisher")
+                    || d.message.contains("IsEmpty")
+                    || d.message.contains("CurrentSessionId")
+                    || d.message.contains("StartSession")
+            }),
+            "did not expect diagnostics for built-in Notification/Dialog/Session/ModuleInfo/SecretText methods, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_database_system_scheduler_filter_builder_blob_file_version_navapp_numbersequence(
+    ) {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Run()
+    var
+        FPB: FilterPageBuilder;
+        B: Blob;
+        Builder: TextBuilder;
+        ModInfo: ModuleInfo;
+        V: Version;
+    begin
+        Database.Commit();
+        if System.Abs(-2) = 2 then;
+        if SessionInformation.SessionId > 0 then;
+        TaskScheduler.CreateTask(50100);
+        FPB.RunModal();
+        B.HasValue();
+        if File.Exists('a.txt') then;
+        V := Version.Create('1.0.0.0');
+        if V.Major > 0 then;
+        NavApp.GetCurrentModuleInfo(ModInfo);
+        NumberSequence.Next('A');
+        Builder.Append('X');
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("Commit")
+                    || d.message.contains("Abs")
+                    || d.message.contains("SessionId")
+                    || d.message.contains("CreateTask")
+                    || d.message.contains("RunModal")
+                    || d.message.contains("HasValue")
+                    || d.message.contains("Exists")
+                    || d.message.contains("Create")
+                    || d.message.contains("Major")
+                    || d.message.contains("GetCurrentModuleInfo")
+                    || d.message.contains("Next")
+                    || d.message.contains("Append")
+            }),
+            "did not expect diagnostics for built-in Database/System/SessionInformation/TaskScheduler/FilterPageBuilder/Blob/File/Version/NavApp/NumberSequence/TextBuilder methods, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_media_mediaset_and_errorinfo() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Run()
+    var
+        M: Media;
+        MS: MediaSet;
+        Err: ErrorInfo;
+    begin
+        M.ImportStream(InS, 'Demo');
+        if M.HasValue then;
+        if MS.Count > 0 then;
+        if MS.Item(1).HasValue then;
+        Err.Message('Invalid');
+        Err.AddNavigationAction('Open', 50100, 'RunAction');
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("ImportStream")
+                    || d.message.contains("HasValue")
+                    || d.message.contains("Count")
+                    || d.message.contains("Item")
+                    || d.message.contains("Message")
+                    || d.message.contains("AddNavigationAction")
+            }),
+            "did not expect diagnostics for built-in Media/MediaSet/ErrorInfo methods, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_test_runtime_types() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Run()
+    var
+        PageVar: TestPage "Dummy List Page";
+        FieldVar: TestField;
+        ActionVar: TestAction;
+        RequestVar: TestRequestPage "Dummy Sales Report";
+        PartVar: TestPart;
+        FilterVar: TestFilter;
+    begin
+        PageVar.OpenView();
+        FieldVar.SetValue('A');
+        if FieldVar.Editable() then;
+        ActionVar.Invoke();
+        ActionVar.Enabled;
+        RequestVar.SaveAsPdf('c:\temp\out.pdf');
+        RequestVar.Schedule;
+        PartVar.GetField(1);
+        if PartVar.Visible then;
+        FilterVar.SetFilter(AnyField, '<>0');
+        FilterVar.CurrentKey;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("OpenView")
+                    || d.message.contains("SetValue")
+                    || d.message.contains("Editable")
+                    || d.message.contains("Invoke")
+                    || d.message.contains("Enabled")
+                    || d.message.contains("SaveAsPdf")
+                    || d.message.contains("Schedule")
+                    || d.message.contains("GetField")
+                    || d.message.contains("Visible")
+                    || d.message.contains("SetFilter")
+                    || d.message.contains("CurrentKey")
+            }),
+            "did not expect diagnostics for built-in test runtime methods, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_enum_asinteger_and_frominteger() {
+        let source = r#"enum 50100 "Dummy Enum"
+{
+    value(0; First) { }
+    value(1; Second) { }
+}
+
+codeunit 50101 Test
+{
+    procedure Run()
+    var
+        E: Enum "Dummy Enum";
+        I: Integer;
+    begin
+        I := E.AsInteger();
+        E := Enum::"Dummy Enum".FromInteger(1);
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("AsInteger")
+                    || d.message.contains("FromInteger")
+                    || d.message.contains("Unknown member")
+            }),
+            "did not expect diagnostics for Enum.AsInteger/FromInteger, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_additional_builtin_runtime_types() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Run()
+    var
+        ReqPage: RequestPage;
+        Upload: FileUpload;
+        ReqMsg: TestHttpRequestMessage;
+        RespMsg: TestHttpResponseMessage;
+        Ctx: WebServiceActionContext;
+        XmlWrite: XmlWriteOptions;
+        Qty: Integer;
+    begin
+        ReqPage.ValidationErrorCount;
+        ReqPage.Update;
+        Upload.FileName;
+        ReqMsg.Headers;
+        RespMsg.IsSuccessStatusCode;
+        Ctx.SetResultCode(0);
+        XmlWrite.PreserveWhitespace;
+        Qty.ToText;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags.iter().any(|d| {
+                d.message.contains("ValidationErrorCount")
+                    || d.message.contains("Update")
+                    || d.message.contains("FileName")
+                    || d.message.contains("Headers")
+                    || d.message.contains("IsSuccessStatusCode")
+                    || d.message.contains("SetResultCode")
+                    || d.message.contains("PreserveWhitespace")
+                    || d.message.contains("ToText")
+            }),
+            "did not expect diagnostics for additional built-in runtime methods, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_semantic_diagnostic_for_builtin_chain_without_parentheses() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure Run()
+    var
+        Tags: Dictionary of [Text, Text];
+    begin
+        if Tags.Keys.Count > 0 then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+        let doc = state.documents.get(&uri).unwrap();
+        let diags = collect_semantic_member_diagnostics(&state, &uri, &doc);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.message.contains("Keys") || d.message.contains("Count")),
+            "did not expect diagnostics for built-in no-() chain, got: {diags:?}"
         );
     }
 

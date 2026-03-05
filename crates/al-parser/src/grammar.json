@@ -3477,7 +3477,7 @@
           "value": "[vV][aA][rR]"
         },
         {
-          "type": "REPEAT1",
+          "type": "REPEAT",
           "content": {
             "type": "SYMBOL",
             "name": "variable_declaration"
@@ -5153,7 +5153,15 @@
         },
         {
           "type": "SYMBOL",
+          "name": "testpage_type"
+        },
+        {
+          "type": "SYMBOL",
           "name": "report_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "testrequestpage_type"
         },
         {
           "type": "SYMBOL",
@@ -5222,7 +5230,15 @@
         },
         {
           "type": "SYMBOL",
+          "name": "testpage_type"
+        },
+        {
+          "type": "SYMBOL",
           "name": "report_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "testrequestpage_type"
         },
         {
           "type": "SYMBOL",
@@ -5394,12 +5410,64 @@
         }
       ]
     },
+    "testpage_type": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "PATTERN",
+          "value": "[tT][eE][sS][tT][pP][aA][gG][eE]"
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "quoted_identifier"
+              }
+            ]
+          }
+        }
+      ]
+    },
     "report_type": {
       "type": "SEQ",
       "members": [
         {
           "type": "PATTERN",
           "value": "[rR][eE][pP][oO][rR][tT]"
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "quoted_identifier"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "testrequestpage_type": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "PATTERN",
+          "value": "[tT][eE][sS][tT][rR][eE][qQ][uU][eE][sS][tT][pP][aA][gG][eE]"
         },
         {
           "type": "FIELD",

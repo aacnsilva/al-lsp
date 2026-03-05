@@ -4,6 +4,7 @@ use al_syntax::ast::AlSymbolKind;
 use al_syntax::navigation::{identifier_at_offset, resolve_at_offset};
 use al_syntax::symbols::format_hover;
 
+use crate::builtins::find_builtin_method;
 use crate::convert::lsp_position_to_byte_offset;
 use crate::handlers::completion::{
     enum_value_target_at_offset, find_table_field_type, member_access_target_at_offset,
@@ -84,6 +85,42 @@ pub fn handle_hover(state: &WorldState, params: HoverParams) -> Option<Hover> {
     }
 
     if let Some(target) = member_access_target_at_offset(state, &doc, &source, byte_offset) {
+        if target.is_method_call {
+            if let Some(method) = find_builtin_method(&target.object_kind, &target.member_name) {
+                let mut value = format!(
+                    "```al\n{}\n```\n\n{}\n\n[Microsoft Learn]({})",
+                    method.signature, method.summary, method.docs_url
+                );
+                if !method.params.is_empty() {
+                    value.push_str("\n\nParameters:");
+                    for param in method.params {
+                        value.push_str(&format!("\n- `{}`: {}", param.label, param.documentation));
+                    }
+                }
+                return Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value,
+                    }),
+                    range: None,
+                });
+            }
+        } else if let Some(method) = find_builtin_method(&target.object_kind, &target.member_name) {
+            if method.params.is_empty() {
+                let value = format!(
+                    "```al\n{}\n```\n\n{}\n\n[Microsoft Learn]({})",
+                    method.signature, method.summary, method.docs_url
+                );
+                return Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value,
+                    }),
+                    range: None,
+                });
+            }
+        }
+
         if !target.is_method_call && target.object_kind.eq_ignore_ascii_case("table") {
             if let Some(type_info) =
                 find_table_field_type(state, &target.object_name, &target.member_name)
@@ -368,6 +405,333 @@ codeunit 50100 Test
         assert!(
             content.value.contains("enum value") && content.value.contains("On Item Added"),
             "expected enum value hover for quoted enum member, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_builtin_record_method() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Rec: Record Customer;
+    begin
+        if Rec.FindFirst() then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "FindFirst");
+        let params = make_hover_params(uri, line, character + 1);
+        let hover = handle_hover(&state, params);
+        assert!(hover.is_some(), "expected hover result");
+        let hover = hover.unwrap();
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("FindFirst(): Boolean")
+                && content.value.contains("Finds the first record"),
+            "expected built-in method hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_builtin_text_method() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Txt: Text;
+    begin
+        if Txt.Contains('A') then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "Contains");
+        let params = make_hover_params(uri, line, character + 1);
+        let hover = handle_hover(&state, params);
+        assert!(hover.is_some(), "expected hover result");
+        let hover = hover.unwrap();
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("Contains(Value: Text): Boolean")
+                && content.value.contains("contains a value"),
+            "expected built-in text method hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_builtin_datetime_member_without_parentheses() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Stamp: DateTime;
+    begin
+        if Stamp.Date.DayOfWeek = 1 then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "Date.DayOfWeek");
+        let params = make_hover_params(uri, line, character + 1);
+        let hover = handle_hover(&state, params);
+        assert!(hover.is_some(), "expected hover result");
+        let hover = hover.unwrap();
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("Date(): Date") && content.value.contains("Date component"),
+            "expected built-in DateTime member hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_builtin_sessionsettings_method() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        SessionCfg: SessionSettings;
+    begin
+        SessionCfg.GetLanguageId();
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "GetLanguageId");
+        let params = make_hover_params(uri, line, character + 1);
+        let hover = handle_hover(&state, params);
+        assert!(hover.is_some(), "expected hover result");
+        let hover = hover.unwrap();
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("GetLanguageId(): Integer")
+                && content.value.contains("session language ID"),
+            "expected built-in SessionSettings hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_builtin_notification_method() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        Notice: Notification;
+    begin
+        Notice.Send();
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "Send");
+        let params = make_hover_params(uri, line, character + 1);
+        let hover = handle_hover(&state, params);
+        assert!(hover.is_some(), "expected hover result");
+        let hover = hover.unwrap();
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("Send()") && content.value.contains("Sends notification"),
+            "expected built-in Notification hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_builtin_database_method() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        Database.Commit();
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "Commit");
+        let params = make_hover_params(uri, line, character + 1);
+        let hover = handle_hover(&state, params);
+        assert!(hover.is_some(), "expected hover result");
+        let hover = hover.unwrap();
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("Commit()") && content.value.contains("commits changes"),
+            "expected built-in Database hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_builtin_system_method() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    begin
+        if System.Abs(-2) = 2 then;
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "Abs");
+        let params = make_hover_params(uri, line, character + 1);
+        let hover = handle_hover(&state, params);
+        assert!(hover.is_some(), "expected hover result");
+        let hover = hover.unwrap();
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("Abs(Number: Decimal): Decimal")
+                && content.value.contains("absolute value"),
+            "expected built-in System hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_builtin_testpage_method() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        PageVar: TestPage;
+    begin
+        PageVar.OpenEdit();
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "OpenEdit");
+        let params = make_hover_params(uri, line, character + 1);
+        let hover = handle_hover(&state, params);
+        assert!(hover.is_some(), "expected hover result");
+        let hover = hover.unwrap();
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("OpenEdit()")
+                && content.value.contains("Opens a test page in edit mode"),
+            "expected built-in TestPage hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_builtin_testrequestpage_method() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        RequestVar: TestRequestPage "Dummy Sales Report";
+    begin
+        RequestVar.SaveAsPdf('c:\temp\out.pdf');
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "SaveAsPdf");
+        let params = make_hover_params(uri, line, character + 1);
+        let hover = handle_hover(&state, params);
+        assert!(hover.is_some(), "expected hover result");
+        let hover = hover.unwrap();
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content.value.contains("SaveAsPdf(FileName: Text)")
+                && content
+                    .value
+                    .contains("Saves the report output as a PDF file"),
+            "expected built-in TestRequestPage hover, got: {}",
+            content.value
+        );
+    }
+
+    #[test]
+    fn test_hover_on_builtin_requestpage_method() {
+        let source = r#"codeunit 50100 Test
+{
+    procedure DoWork()
+    var
+        ReqPage: RequestPage;
+    begin
+        ReqPage.SetSelectionFilter(MyRec);
+    end;
+}"#;
+        let uri = Url::parse("file:///test/all.al").unwrap();
+        let state = WorldState::new();
+        state
+            .documents
+            .insert(uri.clone(), DocumentState::new(source).unwrap());
+
+        let (line, character) = cursor_on(source, "SetSelectionFilter");
+        let params = make_hover_params(uri, line, character + 1);
+        let hover = handle_hover(&state, params);
+        assert!(hover.is_some(), "expected hover result");
+        let hover = hover.unwrap();
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(
+            content
+                .value
+                .contains("SetSelectionFilter(var Record: Record)")
+                && content.value.contains("Applies selected filter"),
+            "expected built-in RequestPage hover, got: {}",
             content.value
         );
     }
