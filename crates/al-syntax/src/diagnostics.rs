@@ -766,6 +766,27 @@ codeunit 50101 "My Subscriber"
     }
 
     #[test]
+    fn test_no_errors_for_global_inline_option_with_empty_first_member() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        ActionKind: Option ,Start,Stop;
+
+    procedure Run()
+    begin
+        Message('%1', ActionKind::Start);
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let diags = extract_diagnostics(&tree, source);
+        assert!(
+            diags.is_empty(),
+            "expected no syntax errors for global option with empty first member, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
     fn test_errors_for_invalid_code() {
         let source = r#"codeunit 50100 Test
 {

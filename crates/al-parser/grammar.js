@@ -1214,8 +1214,8 @@ module.exports = grammar({
           kw("option"),
           optional(
             seq(
-              choice($.identifier, $.quoted_identifier),
-              repeat(seq(",", choice($.identifier, $.quoted_identifier)))
+              optional(choice($.identifier, $.quoted_identifier)),
+              repeat(seq(",", optional(choice($.identifier, $.quoted_identifier))))
             )
           )
         )

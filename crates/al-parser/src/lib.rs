@@ -708,4 +708,25 @@ codeunit 50100 Test
             root.to_sexp()
         );
     }
+
+    #[test]
+    fn test_parse_global_inline_option_with_empty_first_member() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        ActionKind: Option ,Start,Stop;
+
+    procedure Run()
+    begin
+        Message('%1', ActionKind::Start);
+    end;
+}"#;
+        let tree = parse(source).expect("parse failed");
+        let root = tree.root_node();
+        assert!(
+            !root.has_error(),
+            "tree has errors for global option with empty first member: {}",
+            root.to_sexp()
+        );
+    }
 }

@@ -765,4 +765,27 @@ mod tests {
             .expect("option variable");
         assert_eq!(variable.type_info.as_deref(), Some("Option C, \"or D\""));
     }
+
+    #[test]
+    fn test_extract_global_inline_option_with_empty_first_member() {
+        let source = r#"codeunit 50100 Dummy
+{
+    var
+        ActionKind: Option ,Start,Stop;
+
+    procedure Run()
+    begin
+        Message('%1', ActionKind::Start);
+    end;
+}"#;
+        let tree = al_parser::parse(source).unwrap();
+        let symbols = extract_symbols(&tree, source);
+
+        let global = symbols[0]
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, AlSymbolKind::Variable) && c.name == "ActionKind")
+            .expect("global option variable");
+        assert_eq!(global.type_info.as_deref(), Some("Option ,Start,Stop"));
+    }
 }
